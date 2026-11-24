@@ -5,6 +5,7 @@ import SatchelCore
 enum TabHitTest {
     @MainActor
     static func clickEdgeSelectsVideo() throws {
+        TabHitFrames.latest = [:]
         let model = AppModel(persists: false)
         let host = NSHostingView(
             rootView: RootView()
@@ -20,31 +21,28 @@ enum TabHitTest {
             defer: false
         )
         window.contentView = host
+        defer {
+            window.contentView = nil
+            window.close()
+        }
         window.makeKeyAndOrderFront(nil)
         host.layoutSubtreeIfNeeded()
-        RunLoop.current.run(until: Date().addingTimeInterval(0.35))
+        RunLoop.current.run(until: Date().addingTimeInterval(0.4))
         host.layoutSubtreeIfNeeded()
-        defer { window.close() }
 
-        guard let button = find(identifier: "tab-Video", in: host) else {
-            throw ToolError(message: "Video tab was not in the view tree")
+        guard let frame = TabHitFrames.latest["Video"], frame.width > 8, frame.height > 8 else {
+            let names = TabHitFrames.latest.keys.sorted().joined(separator: ", ")
+            throw ToolError(message: "Video tab frame was missing (\(names))")
         }
-        let windowFrame = button.convert(button.bounds, to: nil)
-        guard windowFrame.width > 8, windowFrame.height > 8 else {
-            throw ToolError(message: "Video tab frame was empty")
-        }
-        let windowPoint = NSPoint(x: windowFrame.minX + 3, y: windowFrame.midY)
-        guard let content = window.contentView else { throw ToolError(message: "window had no content") }
-        let local = content.convert(windowPoint, from: nil)
-        guard let hit = content.hitTest(local) else {
+        let local = NSPoint(x: frame.minX + 3, y: frame.midY)
+        guard let hit = host.hitTest(local) else {
             throw ToolError(message: "pill edge was not a hit target")
         }
-        let hitID = hit.accessibilityIdentifier()
-        let ancestor = nearestIdentifier(from: hit)
-        if hitID != "tab-Video" && ancestor != "tab-Video" && !owns(hit, identifier: "tab-Video") {
-            let label = hitID.isEmpty ? String(describing: type(of: hit)) : hitID
-            throw ToolError(message: "pill edge hit \(label)")
+        let hitFrame = hit.convert(hit.bounds, to: host)
+        if !frame.insetBy(dx: -2, dy: -2).intersects(hitFrame) && !frame.contains(local) {
+            throw ToolError(message: "pill edge hit a view outside the Video tab")
         }
+        let windowPoint = host.convert(local, to: nil)
         guard let down = mouseEvent(.leftMouseDown, at: windowPoint, window: window),
               let up = mouseEvent(.leftMouseUp, at: windowPoint, window: window) else {
             throw ToolError(message: "could not build a click")
@@ -69,32 +67,5 @@ enum TabHitTest {
             clickCount: 1,
             pressure: 1
         )
-    }
-
-    private static func find(identifier: String, in view: NSView) -> NSView? {
-        if view.accessibilityIdentifier() == identifier { return view }
-        for subview in view.subviews {
-            if let found = find(identifier: identifier, in: subview) { return found }
-        }
-        return nil
-    }
-
-    private static func nearestIdentifier(from view: NSView) -> String {
-        var current: NSView? = view
-        while let node = current {
-            let identifier = node.accessibilityIdentifier()
-            if !identifier.isEmpty { return identifier }
-            current = node.superview
-        }
-        return ""
-    }
-
-    private static func owns(_ view: NSView, identifier: String) -> Bool {
-        var current: NSView? = view
-        while let node = current {
-            if node.accessibilityIdentifier() == identifier { return true }
-            current = node.superview
-        }
-        return false
     }
 }

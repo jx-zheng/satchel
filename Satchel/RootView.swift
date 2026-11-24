@@ -2,6 +2,17 @@ import AppKit
 import SwiftUI
 import SatchelCore
 
+enum TabHitFrames {
+    static var latest: [String: CGRect] = [:]
+}
+
+private struct TabFrameKey: PreferenceKey {
+    static var defaultValue: [String: CGRect] = [:]
+    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
+        value.merge(nextValue(), uniquingKeysWith: { $1 })
+    }
+}
+
 extension Notification.Name {
     static let satchelRun = Notification.Name("satchel.run")
     static let satchelOpenPanel = Notification.Name("satchel.openPanel")
@@ -26,6 +37,8 @@ struct RootView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(Color(nsColor: .windowBackgroundColor))
+        .coordinateSpace(name: "satchel-root")
+        .onPreferenceChange(TabFrameKey.self) { TabHitFrames.latest = $0 }
         .frame(minWidth: snapshot ? 1440 : 1080, minHeight: snapshot ? 900 : 680)
         .onAppear {
             guard !snapshot else { return }
@@ -154,6 +167,9 @@ struct RootView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Capsule().fill(selected ? Palette.accent.opacity(scheme == .dark ? 0.28 : 0.14) : Color.clear))
             .contentShape(Capsule())
+            .background(GeometryReader { geo in
+                Color.clear.preference(key: TabFrameKey.self, value: [title: geo.frame(in: .named("satchel-root"))])
+            })
         }
         .buttonStyle(.plain)
         .contentShape(Capsule())
