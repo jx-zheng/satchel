@@ -495,6 +495,7 @@ final class WebPDFModel: NSObject, ObservableObject, WKNavigationDelegate {
     @Published var busy = false
     private var continuation: CheckedContinuation<Data, Error>?
     private var storage: WKWebView?
+    private(set) var navigationFinished = false
 
     var webView: WKWebView {
         if let storage { return storage }
@@ -532,5 +533,7 @@ final class WebPDFModel: NSObject, ObservableObject, WKNavigationDelegate {
         }
     }
 
-    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {}
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        navigationFinished = true
+    }
 }

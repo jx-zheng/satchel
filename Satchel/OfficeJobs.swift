@@ -497,10 +497,14 @@ enum ZipPack {
             throw ToolError(message: "Could not package the document.")
         }
         var files: [(String, Data)] = []
+        let root = folder.resolvingSymlinksInPath().standardizedFileURL.path
         for case let url as URL in enumerator {
             let values = try? url.resourceValues(forKeys: [.isDirectoryKey])
             if values?.isDirectory == true { continue }
-            let relative = url.path.replacingOccurrences(of: folder.path + "/", with: "")
+            let full = url.resolvingSymlinksInPath().standardizedFileURL.path
+            guard full.hasPrefix(root + "/") else { continue }
+            let relative = String(full.dropFirst(root.count + 1))
+            guard !relative.isEmpty, !relative.hasPrefix("/") else { continue }
             files.append((relative, try Data(contentsOf: url)))
         }
         guard !files.isEmpty else { throw ToolError(message: "Could not package an empty document.") }

@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 @main
@@ -11,11 +12,13 @@ enum SatchelMain {
             }
             dispatchMain()
         } else if let job = Launch.selfTestJob {
-            Task {
+            let app = NSApplication.shared
+            app.setActivationPolicy(.accessory)
+            Task { @MainActor in
                 let code = await SelfTest.runOne(directory: job.directory, toolID: job.tool)
                 exit(Int32(code))
             }
-            dispatchMain()
+            app.run()
         } else {
             SatchelApp.main()
         }

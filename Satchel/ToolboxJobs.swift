@@ -103,22 +103,25 @@ enum SubtitleBurn {
         let videoLayer = CALayer()
         parent.frame = CGRect(origin: .zero, size: size)
         videoLayer.frame = parent.frame
-        parent.isGeometryFlipped = true
         parent.beginTime = AVCoreAnimationBeginTimeAtZero
         parent.addSublayer(videoLayer)
-        let fontSize = max(28, size.height * 0.16)
+        let fontSize = max(36, size.height * 0.22)
         for cue in cues {
             let text = CATextLayer()
+            let font = CTFontCreateWithName("Helvetica-Bold" as CFString, fontSize, nil)
             text.string = cue.text
-            text.font = "Helvetica-Bold" as CFTypeRef
+            text.font = font
             text.fontSize = fontSize
             text.alignmentMode = .center
             text.foregroundColor = CGColor(gray: 1, alpha: 1)
-            text.backgroundColor = CGColor(gray: 0, alpha: 0.72)
+            text.backgroundColor = CGColor(gray: 0, alpha: 1)
             text.isWrapped = true
             text.contentsScale = 2
-            text.frame = CGRect(x: 8, y: 10, width: size.width - 16, height: max(44, size.height * 0.28))
-            text.opacity = 1
+            text.isGeometryFlipped = true
+            text.shouldRasterize = true
+            text.rasterizationScale = 2
+            text.frame = CGRect(x: 0, y: size.height * 0.32, width: size.width, height: max(56, size.height * 0.36))
+            text.opacity = 0
             let show = CABasicAnimation(keyPath: "opacity")
             show.fromValue = 1
             show.toValue = 1

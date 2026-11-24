@@ -25,35 +25,45 @@ enum BundleFixture {
 
 enum ColorSample {
     static func hex(image: CGImage, x: Int, y: Int) -> String {
-        guard let data = image.dataProvider?.data, let bytes = CFDataGetBytePtr(data) else { return "" }
-        let width = image.width
-        let height = image.height
-        guard x >= 0, y >= 0, x < width, y < height else { return "" }
-        let row = image.bytesPerRow
-        let offset = y * row + x * 4
-        let red = bytes[offset]
-        let green = bytes[offset + 1]
-        let blue = bytes[offset + 2]
-        return String(format: "#%02X%02X%02X", red, green, blue)
+        guard let pixels = bitmap(image) else { return "" }
+        guard x >= 0, y >= 0, x < pixels.width, y < pixels.height else { return "" }
+        let offset = (y * pixels.width + x) * 4
+        return String(format: "#%02X%02X%02X", pixels.bytes[offset], pixels.bytes[offset + 1], pixels.bytes[offset + 2])
     }
 
     static func contains(image: CGImage, red: UInt8, green: UInt8, blue: UInt8) -> Bool {
-        guard let data = image.dataProvider?.data, let bytes = CFDataGetBytePtr(data) else { return false }
-        let row = image.bytesPerRow
-        for y in stride(from: 0, to: image.height, by: 4) {
-            for x in stride(from: 0, to: image.width, by: 4) {
-                let offset = y * row + x * 4
-                let samples = [bytes[offset], bytes[offset + 1], bytes[offset + 2]]
-                let targets = [red, green, blue]
-                for rotation in 0..<3 {
-                    let shifted = (0..<3).map { samples[($0 + rotation) % 3] }
-                    if zip(shifted, targets).allSatisfy({ abs(Int($0.0) - Int($0.1)) < 24 }) {
-                        return true
-                    }
+        guard let pixels = bitmap(image) else { return false }
+        for y in stride(from: 0, to: pixels.height, by: 4) {
+            for x in stride(from: 0, to: pixels.width, by: 4) {
+                let offset = (y * pixels.width + x) * 4
+                let samples = [pixels.bytes[offset], pixels.bytes[offset + 1], pixels.bytes[offset + 2]]
+                if abs(Int(samples[0]) - Int(red)) < 24,
+                   abs(Int(samples[1]) - Int(green)) < 24,
+                   abs(Int(samples[2]) - Int(blue)) < 24 {
+                    return true
                 }
             }
         }
         return false
+    }
+
+    private static func bitmap(_ image: CGImage) -> (width: Int, height: Int, bytes: [UInt8])? {
+        let width = image.width
+        let height = image.height
+        guard width > 0, height > 0 else { return nil }
+        var bytes = [UInt8](repeating: 0, count: width * height * 4)
+        let info = CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue
+        guard let context = CGContext(
+            data: &bytes,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: width * 4,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: info
+        ) else { return nil }
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        return (width, height, bytes)
     }
 
     static func swatch(color: (UInt8, UInt8, UInt8), to url: URL) throws {
@@ -294,9 +304,9 @@ enum WebProbe {
             window.contentView = nil
             window.orderOut(nil)
         }
-        model.webView.loadHTMLString(html, baseURL: nil)
+        model.webView.loadHTMLString(html, baseURL: URL(string: "about:blank"))
         let start = Date()
-        while model.webView.isLoading || model.webView.url == nil {
+        while !model.navigationFinished {
             if Date().timeIntervalSince(start) > 8 {
                 throw ToolError(message: "the local page did not load")
             }
