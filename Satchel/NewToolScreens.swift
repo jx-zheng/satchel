@@ -4,6 +4,7 @@ import UniformTypeIdentifiers
 import SatchelCore
 
 struct DownloadVideoTool: View {
+    @Environment(\.satchelSnapshot) private var snapshot
     @State private var link = ""
     @State private var allowPageTool = true
     @State private var running = false
@@ -11,6 +12,7 @@ struct DownloadVideoTool: View {
     @State private var message = ""
     @State private var output: URL?
     @State private var failed = false
+    @State private var ytdlpNote = "Direct files and HLS playlists download on this Mac."
 
     var body: some View {
         ToolPage(tool: ToolRegistry.definition(.downloadVideo)) {
@@ -24,9 +26,7 @@ struct DownloadVideoTool: View {
             TextField("https://…", text: $link)
                 .textFieldStyle(.roundedBorder)
             Toggle("Use yt-dlp for a page, if you installed it", isOn: $allowPageTool)
-            Text(VideoDownload.ytdlpBinary() == nil
-                 ? "yt-dlp is not installed. Direct files and HLS playlists still download."
-                 : "yt-dlp was found on this Mac and will be used only for page links.")
+            Text(ytdlpNote)
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -44,6 +44,17 @@ struct DownloadVideoTool: View {
             }
             if let output {
                 ResultTray(urls: [output], heading: "Saved in Downloads/Satchel")
+            }
+        }
+        .onAppear {
+            guard !snapshot else { return }
+            DispatchQueue.global(qos: .utility).async {
+                let installed = VideoDownload.ytdlpBinary() != nil
+                DispatchQueue.main.async {
+                    ytdlpNote = installed
+                        ? "yt-dlp was found on this Mac and will be used only for page links."
+                        : "yt-dlp is not installed. Direct files and HLS playlists still download."
+                }
             }
         }
     }

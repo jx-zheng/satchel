@@ -86,13 +86,6 @@ enum Snapshotter {
                 model.query = ""
                 shot(model, scheme: scheme, appearance: appearance, to: toolsFolder.appendingPathComponent("\(id.rawValue)-\(schemeName).png"), sample: false, settle: 0.05)
             }
-            if schemeName == "light" {
-                for id in ToolID.allCases {
-                    model.openTool = id
-                    model.category = ToolRegistry.byID[id]?.category
-                    shot(model, scheme: scheme, appearance: appearance, to: toolsFolder.appendingPathComponent("\(id.rawValue)-result-light.png"), sample: true, settle: 0.04)
-                }
-            }
             model.openTool = nil
         }
         exit(0)
