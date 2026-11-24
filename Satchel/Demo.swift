@@ -28,7 +28,7 @@ struct DemoRoot: View {
             .frame(width: 1280, height: 840)
             .task {
                 await DemoScript.run(directory: directory, record: record, model: model)
-                exit(0)
+                NSApp.terminate(nil)
             }
             .onAppear { center() }
     }

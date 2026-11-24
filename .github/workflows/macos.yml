@@ -155,31 +155,26 @@ jobs:
           test -n "$APP"
           codesign --force --deep --sign - "$APP" || true
           mkdir -p "$RUNNER_TEMP/demo"
-          open "$APP" --args --demo "$RUNNER_TEMP/demo"
-          for _ in $(seq 1 30); do
+          # ScreenCaptureKit inside the app crashes this runner. Record the display
+          # from outside while the app plays the demo and then exits cleanly.
+          screencapture -v "$RUNNER_TEMP/demo/raw.mov" &
+          cap=$!
+          sleep 1
+          open "$APP" --args --demo "$RUNNER_TEMP/demo" --demo-norecord
+          for _ in $(seq 1 40); do
             pgrep -x Satchel >/dev/null && break
             sleep 1
           done
-          for _ in $(seq 1 180); do
-            if [ -f "$RUNNER_TEMP/demo/satchel-demo.mp4" ]; then
-              break
-            fi
+          for _ in $(seq 1 150); do
             pgrep -x Satchel >/dev/null || break
             sleep 1
           done
-          if [ ! -f "$RUNNER_TEMP/demo/satchel-demo.mp4" ]; then
-            screencapture -v -V 25 "$RUNNER_TEMP/demo/raw.mov" &
-            cap=$!
-            sleep 1
-            open "$APP" --args --demo "$RUNNER_TEMP/demo" --demo-norecord || true
-            wait "$cap" || true
-            for _ in $(seq 1 90); do
-              pgrep -x Satchel >/dev/null || break
-              sleep 1
-            done
-          fi
+          sleep 1
+          kill -INT "$cap" || true
+          wait "$cap" || true
+          avconvert --source "$RUNNER_TEMP/demo/raw.mov" --preset Preset1280x720 --output "$RUNNER_TEMP/demo/satchel-demo.mp4"
           find "$RUNNER_TEMP/demo" -type f -exec ls -lh {} \;
-          test -f "$RUNNER_TEMP/demo/satchel-demo.mp4" -o -f "$RUNNER_TEMP/demo/raw.mov"
+          test -f "$RUNNER_TEMP/demo/satchel-demo.mp4"
       - name: Upload demo
         if: always()
         uses: actions/upload-artifact@v4
