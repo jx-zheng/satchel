@@ -7,9 +7,6 @@ on:
         description: Draft smoke only. Not the deliverable.
         type: boolean
         default: true
-  push:
-    branches:
-      - cursor/satchel-selftest-perf-demo-17b5
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

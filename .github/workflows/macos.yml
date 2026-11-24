@@ -147,6 +147,46 @@ jobs:
             echo "leaks reported allocated memory that was not freed"
             exit 1
           fi
+      - name: Record demo
+        timeout-minutes: 20
+        run: |
+          set -euo pipefail
+          APP="$(find "$RUNNER_TEMP/dd/Build/Products/Release" -name 'Satchel.app' -type d | head -1)"
+          test -n "$APP"
+          codesign --force --deep --sign - "$APP" || true
+          mkdir -p "$RUNNER_TEMP/demo"
+          open "$APP" --args --demo "$RUNNER_TEMP/demo"
+          for _ in $(seq 1 30); do
+            pgrep -x Satchel >/dev/null && break
+            sleep 1
+          done
+          for _ in $(seq 1 180); do
+            if [ -f "$RUNNER_TEMP/demo/satchel-demo.mp4" ]; then
+              break
+            fi
+            pgrep -x Satchel >/dev/null || break
+            sleep 1
+          done
+          if [ ! -f "$RUNNER_TEMP/demo/satchel-demo.mp4" ]; then
+            screencapture -v -V 25 "$RUNNER_TEMP/demo/raw.mov" &
+            cap=$!
+            sleep 1
+            open "$APP" --args --demo "$RUNNER_TEMP/demo" --demo-norecord || true
+            wait "$cap" || true
+            for _ in $(seq 1 90); do
+              pgrep -x Satchel >/dev/null || break
+              sleep 1
+            done
+          fi
+          find "$RUNNER_TEMP/demo" -type f -exec ls -lh {} \;
+          test -f "$RUNNER_TEMP/demo/satchel-demo.mp4" -o -f "$RUNNER_TEMP/demo/raw.mov"
+      - name: Upload demo
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: satchel-demo
+          path: ${{ runner.temp }}/demo
+          if-no-files-found: error
 
   redesign:
     needs: macos
