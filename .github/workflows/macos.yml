@@ -155,26 +155,28 @@ jobs:
           test -n "$APP"
           codesign --force --deep --sign - "$APP" || true
           mkdir -p "$RUNNER_TEMP/demo"
-          # ScreenCaptureKit inside the app crashes this runner. Record the display
-          # from outside while the app plays the demo and then exits cleanly.
-          screencapture -v "$RUNNER_TEMP/demo/raw.mov" &
+          # ScreenCaptureKit inside the app aborts on this runner, and an open-ended
+          # screencapture exits at once. Record a fixed window that covers the demo.
+          screencapture -v -V 100 "$RUNNER_TEMP/demo/raw.mov" &
           cap=$!
           sleep 1
           open "$APP" --args --demo "$RUNNER_TEMP/demo" --demo-norecord
-          for _ in $(seq 1 40); do
-            pgrep -x Satchel >/dev/null && break
+          seen=0
+          for _ in $(seq 1 100); do
+            if pgrep -x Satchel >/dev/null; then
+              seen=1
+            elif [ "$seen" = "1" ]; then
+              break
+            fi
             sleep 1
           done
-          for _ in $(seq 1 150); do
-            pgrep -x Satchel >/dev/null || break
-            sleep 1
-          done
-          sleep 1
-          kill -INT "$cap" || true
           wait "$cap" || true
           avconvert --source "$RUNNER_TEMP/demo/raw.mov" --preset Preset1280x720 --output "$RUNNER_TEMP/demo/satchel-demo.mp4"
-          find "$RUNNER_TEMP/demo" -type f -exec ls -lh {} \;
+          find "$RUNNER_TEMP/demo" -maxdepth 1 -type f -exec ls -lh {} \;
           test -f "$RUNNER_TEMP/demo/satchel-demo.mp4"
+          seconds=$(afinfo "$RUNNER_TEMP/demo/satchel-demo.mp4" | awk -F: '/estimated duration/ {print int($2)}')
+          echo "demo seconds=$seconds"
+          test "${seconds:-0}" -ge 30
       - name: Upload demo
         if: always()
         uses: actions/upload-artifact@v4
