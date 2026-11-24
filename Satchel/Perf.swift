@@ -285,7 +285,8 @@ enum PerfMedia {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             let gate = ResumeGate()
             let cursor = ClipWriteState()
-            video.requestMediaDataWhenReady(on: queue) {
+            video.requestMediaDataWhenReady(on: queue) { [weak video, weak writer, weak adaptor] in
+                guard let video, let writer, let adaptor else { return }
                 while video.isReadyForMoreMediaData {
                     guard let index = cursor.bumpFrame(limit: frames) else { break }
                     autoreleasepool {
@@ -297,9 +298,9 @@ enum PerfMedia {
                 if cursor.filled(frames), !cursor.videoDone {
                     cursor.videoDone = true
                     video.markAsFinished()
-                    writer.finishWriting {
-                        if writer.status == .completed { gate.resume(continuation) }
-                        else { gate.fail(continuation, ToolError(message: writer.error?.localizedDescription ?? "perf clip failed")) }
+                    writer.finishWriting { [weak writer] in
+                        if writer?.status == .completed { gate.resume(continuation) }
+                        else { gate.fail(continuation, ToolError(message: writer?.error?.localizedDescription ?? "perf clip failed")) }
                     }
                 }
             }

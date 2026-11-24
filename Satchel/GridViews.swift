@@ -116,7 +116,6 @@ struct ToolRow: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
-                        .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 12)
                 Image(systemName: "chevron.right")
