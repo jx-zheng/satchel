@@ -118,14 +118,14 @@ enum SubtitleBurn {
             text.isWrapped = true
             text.contentsScale = 2
             text.frame = CGRect(x: 8, y: 10, width: size.width - 16, height: max(44, size.height * 0.28))
-            text.opacity = 0
+            text.opacity = 1
             let show = CABasicAnimation(keyPath: "opacity")
             show.fromValue = 1
             show.toValue = 1
             show.beginTime = AVCoreAnimationBeginTimeAtZero + cue.start
-            show.duration = max(0.15, cue.end - cue.start)
-            show.fillMode = .removed
-            show.isRemovedOnCompletion = true
+            show.duration = max(0.2, cue.end - cue.start)
+            show.fillMode = .forwards
+            show.isRemovedOnCompletion = false
             text.add(show, forKey: "show")
             parent.addSublayer(text)
         }
@@ -194,58 +194,38 @@ enum AudioCleanup {
 
     static func denoise(samples: [Float], sampleRate: Double) -> [Float] {
         let n = 1024
-        let hop = 256
-        guard samples.count > n else { return samples }
-        let window = hann(n)
-        let prefix = min(samples.count / 2, Int(sampleRate * 0.25))
-        let prefixLevel = rms(samples, 0, prefix)
-        let restLevel = rms(samples, prefix, samples.count)
-        let noiseFrames = frameStarts(count: samples.count, n: n, hop: hop).filter { start in
-            if prefix > n, prefixLevel + 0.0001 < restLevel * 0.75 {
-                return start + n <= prefix
-            }
-            return false
-        }
-        let chosen: [Int]
-        if noiseFrames.count >= 4 {
-            chosen = noiseFrames
-        } else {
-            let starts = frameStarts(count: samples.count, n: n, hop: hop)
-            let ranked = starts.map { start -> (Int, Float) in
-                (start, rms(samples, start, start + n))
-            }.sorted { $0.1 < $1.1 }
-            let take = max(4, ranked.count / 5)
-            chosen = ranked.prefix(take).map(\.0)
-        }
-        guard var noise = averagePower(samples, window: window, n: n, frames: chosen) else { return samples }
-        for index in 0..<noise.count { noise[index] *= 1.05 }
-        var acc = [Float](repeating: 0, count: samples.count)
-        var weight = [Float](repeating: 0, count: samples.count)
+        guard samples.count > n * 2 else { return samples }
+        let prefix = min(samples.count / 2, max(n, Int(sampleRate * 0.25)))
+        var noise = [Float](repeating: 0, count: n)
+        var noiseFrames = 0
         var start = 0
+        while start + n <= prefix {
+            let spec = SpectralFFT.forward(Array(samples[start..<(start + n)]))
+            for index in 0..<min(n, spec.count) {
+                noise[index] += spec[index].0 * spec[index].0 + spec[index].1 * spec[index].1
+            }
+            noiseFrames += 1
+            start += n
+        }
+        guard noiseFrames > 0 else { return samples }
+        for index in 0..<n { noise[index] /= Float(noiseFrames) }
+        var output = samples
+        start = 0
         while start + n <= samples.count {
-            var frame = Array(samples[start..<(start + n)])
-            for index in 0..<n { frame[index] *= window[index] }
-            var spec = SpectralFFT.forward(frame)
+            var spec = SpectralFFT.forward(Array(samples[start..<(start + n)]))
             for index in 0..<spec.count {
                 let power = spec[index].0 * spec[index].0 + spec[index].1 * spec[index].1
-                let floor = noise[min(index, noise.count - 1)]
-                let gain = sqrt(max(0, power - floor) / max(power, 1e-12))
-                let clamped = max(0.03, min(1, gain))
-                spec[index].0 *= clamped
-                spec[index].1 *= clamped
+                let gain = min(1, sqrt(max(0, power - noise[min(index, n - 1)]) / max(power, 1e-8)))
+                spec[index].0 *= gain
+                spec[index].1 *= gain
             }
             let back = SpectralFFT.inverse(spec)
-            let count = min(n, back.count)
-            for index in 0..<count {
-                acc[start + index] += back[index]
-                weight[start + index] += window[index]
+            for index in 0..<min(n, back.count) {
+                output[start + index] = back[index]
             }
-            start += hop
+            start += n
         }
-        for index in 0..<acc.count where weight[index] > 1e-5 {
-            acc[index] /= weight[index]
-        }
-        return acc
+        return output
     }
 
     static func snr(reference: [Float], observed: [Float], from start: Int) -> Double {

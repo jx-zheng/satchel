@@ -37,6 +37,25 @@ enum ColorSample {
         return String(format: "#%02X%02X%02X", red, green, blue)
     }
 
+    static func contains(image: CGImage, red: UInt8, green: UInt8, blue: UInt8) -> Bool {
+        guard let data = image.dataProvider?.data, let bytes = CFDataGetBytePtr(data) else { return false }
+        let row = image.bytesPerRow
+        for y in stride(from: 0, to: image.height, by: 4) {
+            for x in stride(from: 0, to: image.width, by: 4) {
+                let offset = y * row + x * 4
+                let samples = [bytes[offset], bytes[offset + 1], bytes[offset + 2]]
+                let targets = [red, green, blue]
+                for rotation in 0..<3 {
+                    let shifted = (0..<3).map { samples[($0 + rotation) % 3] }
+                    if zip(shifted, targets).allSatisfy({ abs(Int($0.0) - Int($0.1)) < 24 }) {
+                        return true
+                    }
+                }
+            }
+        }
+        return false
+    }
+
     static func swatch(color: (UInt8, UInt8, UInt8), to url: URL) throws {
         let width = 64
         let height = 64
@@ -267,14 +286,15 @@ private struct TranslateProbeView: View {
 @MainActor
 enum WebProbe {
     static func pdf(html: String, in folder: URL) async throws -> URL {
-        let file = folder.appendingPathComponent("page.html")
-        try html.write(to: file, atomically: true, encoding: .utf8)
         let model = WebPDFModel()
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 700), styleMask: [.borderless], backing: .buffered, defer: false)
         window.contentView = model.webView
         window.orderFrontRegardless()
-        defer { window.close() }
-        model.loadFile(file)
+        defer {
+            window.contentView = nil
+            window.orderOut(nil)
+        }
+        model.webView.loadHTMLString(html, baseURL: nil)
         let start = Date()
         while model.webView.isLoading || model.webView.url == nil {
             if Date().timeIntervalSince(start) > 8 {

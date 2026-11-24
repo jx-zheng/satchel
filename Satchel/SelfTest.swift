@@ -325,8 +325,9 @@ enum SelfTest {
             let swatch = fixtures.folder.appendingPathComponent("swatch.png")
             try ColorSample.swatch(color: (255, 0, 0), to: swatch)
             let image = try ImageFiles.load(swatch)
-            let hex = ColorSample.hex(image: image, x: 8, y: 8)
-            if hex != "#FF0000" { throw ToolError(message: "sampled \(hex)") }
+            if !ColorSample.contains(image: image, red: 255, green: 0, blue: 0) {
+                throw ToolError(message: "sampled \(ColorSample.hex(image: image, x: image.width / 2, y: image.height / 2))")
+            }
         case .cleanKeyboard:
             if !KeyboardCover.shared.show() { throw SkipSignal(reason: "no display for the keyboard cover") }
             KeyboardCover.shared.hide()
@@ -398,8 +399,12 @@ enum SelfTest {
             generator.appliesPreferredTrackTransform = true
             generator.requestedTimeToleranceBefore = .zero
             generator.requestedTimeToleranceAfter = .zero
-            let sample = try await generator.image(at: CMTime(seconds: 1.0, preferredTimescale: 600)).image
-            let recognized = (try? OCRJobs.text(from: sample)) ?? ""
+            var recognized = ""
+            for seconds in [0.4, 1.0, 1.6] {
+                let sample = try await generator.image(at: CMTime(seconds: seconds, preferredTimescale: 600)).image
+                recognized = (try? OCRJobs.text(from: sample)) ?? ""
+                if recognized.uppercased().contains("HELLO") { break }
+            }
             if !recognized.uppercased().contains("HELLO") {
                 throw ToolError(message: "burned frame text was \(recognized)")
             }

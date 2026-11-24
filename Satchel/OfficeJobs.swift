@@ -493,19 +493,98 @@ enum ZipPack {
         if FileManager.default.fileExists(atPath: dest.path) {
             try FileManager.default.removeItem(at: dest)
         }
-        let children = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
-        guard !children.isEmpty else { throw ToolError(message: "Could not package an empty document.") }
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
-        process.currentDirectoryURL = folder
-        process.arguments = ["-c", "-k", "--norsrc"] + children + [dest.path]
-        let pipe = Pipe()
-        process.standardError = pipe
-        try process.run()
-        process.waitUntilExit()
-        guard process.terminationStatus == 0, FileManager.default.fileExists(atPath: dest.path) else {
+        guard let enumerator = FileManager.default.enumerator(at: folder, includingPropertiesForKeys: [.isDirectoryKey]) else {
             throw ToolError(message: "Could not package the document.")
         }
+        var files: [(String, Data)] = []
+        for case let url as URL in enumerator {
+            let values = try? url.resourceValues(forKeys: [.isDirectoryKey])
+            if values?.isDirectory == true { continue }
+            let relative = url.path.replacingOccurrences(of: folder.path + "/", with: "")
+            files.append((relative, try Data(contentsOf: url)))
+        }
+        guard !files.isEmpty else { throw ToolError(message: "Could not package an empty document.") }
+        try StoredZip.write(files, to: dest)
+    }
+}
+
+enum StoredZip {
+    static func write(_ files: [(String, Data)], to dest: URL) throws {
+        var archive = Data()
+        var directory = Data()
+        var offset: UInt32 = 0
+        for (name, data) in files {
+            let path = Data(name.utf8)
+            let crc = checksum(data)
+            let size = UInt32(data.count)
+            var local = Data()
+            local.append(le32(0x04034b50))
+            local.append(le16(20))
+            local.append(le16(0))
+            local.append(le16(0))
+            local.append(le16(0))
+            local.append(le16(0))
+            local.append(le32(crc))
+            local.append(le32(size))
+            local.append(le32(size))
+            local.append(le16(UInt16(path.count)))
+            local.append(le16(0))
+            local.append(path)
+            local.append(data)
+            archive.append(local)
+            var central = Data()
+            central.append(le32(0x02014b50))
+            central.append(le16(20))
+            central.append(le16(20))
+            central.append(le16(0))
+            central.append(le16(0))
+            central.append(le16(0))
+            central.append(le16(0))
+            central.append(le32(crc))
+            central.append(le32(size))
+            central.append(le32(size))
+            central.append(le16(UInt16(path.count)))
+            central.append(le16(0))
+            central.append(le16(0))
+            central.append(le16(0))
+            central.append(le16(0))
+            central.append(le32(0))
+            central.append(le32(offset))
+            central.append(path)
+            directory.append(central)
+            offset += UInt32(local.count)
+        }
+        let directoryStart = UInt32(archive.count)
+        archive.append(directory)
+        archive.append(le32(0x06054b50))
+        archive.append(le16(0))
+        archive.append(le16(0))
+        archive.append(le16(UInt16(files.count)))
+        archive.append(le16(UInt16(files.count)))
+        archive.append(le32(UInt32(directory.count)))
+        archive.append(le32(directoryStart))
+        archive.append(le16(0))
+        try archive.write(to: dest)
+    }
+
+    private static func checksum(_ data: Data) -> UInt32 {
+        var crc: UInt32 = 0xFFFF_FFFF
+        for byte in data {
+            var value = crc ^ UInt32(byte)
+            for _ in 0..<8 {
+                value = (value & 1) == 1 ? (0xEDB8_8320 ^ (value >> 1)) : (value >> 1)
+            }
+            crc = value
+        }
+        return crc ^ 0xFFFF_FFFF
+    }
+
+    private static func le16(_ value: UInt16) -> Data {
+        Data([UInt8(value & 0xff), UInt8(value >> 8)])
+    }
+
+    private static func le32(_ value: UInt32) -> Data {
+        Data([UInt8(value & 0xff), UInt8((value >> 8) & 0xff), UInt8((value >> 16) & 0xff), UInt8(value >> 24)])
     }
 }
 
