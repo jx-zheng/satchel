@@ -22,8 +22,9 @@ enum TabHitTest {
         )
         window.contentView = host
         defer {
+            host.removeFromSuperview()
             window.contentView = nil
-            window.close()
+            window.orderOut(nil)
         }
         window.makeKeyAndOrderFront(nil)
         host.layoutSubtreeIfNeeded()

@@ -45,14 +45,8 @@ enum SelfTest {
             return 1
         }
         var failed = 0
-        let tabLine: String
-        do {
-            try TabHitTest.clickEdgeSelectsVideo()
-            tabLine = "SELFTEST tab-hit PASS"
-        } catch {
-            tabLine = "SELFTEST tab-hit FAIL \(error.localizedDescription.replacingOccurrences(of: "\n", with: " "))"
-            failed += 1
-        }
+        let tabLine = await tabHitLine()
+        if tabLine.contains(" FAIL ") { failed += 1 }
         emit(tabLine)
         var lines: [String] = [tabLine]
         for tool in ToolRegistry.all {
@@ -85,6 +79,36 @@ enum SelfTest {
         let line = await evaluate(tool, fixtures: fixtures)
         try? line.write(to: root.appendingPathComponent("result.txt"), atomically: true, encoding: .utf8)
         return line.contains(" FAIL ") ? 1 : 0
+    }
+
+    @MainActor
+    private static func tabHitLine() async -> String {
+        guard let exe = Bundle.main.executableURL else {
+            return "SELFTEST tab-hit FAIL missing executable"
+        }
+        let process = Process()
+        process.executableURL = exe
+        process.arguments = ["--tab-hit"]
+        let status: Int32 = await withCheckedContinuation { continuation in
+            let once = ResumeOnce()
+            process.terminationHandler = { proc in
+                once.run { continuation.resume(returning: proc.terminationStatus) }
+            }
+            do { try process.run() } catch {
+                once.run { continuation.resume(returning: -2) }
+                return
+            }
+            DispatchQueue.global().asyncAfter(deadline: .now() + 60) {
+                if process.isRunning {
+                    process.terminate()
+                    kill(process.processIdentifier, SIGKILL)
+                }
+                once.run { continuation.resume(returning: -1) }
+            }
+        }
+        if status == 0 { return "SELFTEST tab-hit PASS" }
+        if status == -1 { return "SELFTEST tab-hit FAIL timeout" }
+        return "SELFTEST tab-hit FAIL exit \(status)"
     }
 
     @MainActor

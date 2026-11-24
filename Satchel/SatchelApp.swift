@@ -4,7 +4,13 @@ import SwiftUI
 enum SatchelMain {
     static func main() {
         Launch.noteBoot()
-        if let job = Launch.selfTestJob {
+        if CommandLine.arguments.contains("--tab-hit") {
+            Task { @MainActor in
+                let ok = (try? TabHitTest.clickEdgeSelectsVideo()) != nil
+                exit(ok ? 0 : 1)
+            }
+            dispatchMain()
+        } else if let job = Launch.selfTestJob {
             Task {
                 let code = await SelfTest.runOne(directory: job.directory, toolID: job.tool)
                 exit(Int32(code))
