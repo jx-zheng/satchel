@@ -81,10 +81,22 @@ enum Snapshotter {
                 shot(model, scheme: scheme, appearance: appearance, to: folder.appendingPathComponent("tool-\(name)-\(schemeName).png"), sample: false)
             }
             for id in ToolID.allCases {
-                model.openTool = id
-                model.category = ToolRegistry.byID[id]?.category
-                model.query = ""
-                shot(model, scheme: scheme, appearance: appearance, to: toolsFolder.appendingPathComponent("\(id.rawValue)-\(schemeName).png"), sample: false, settle: 0.05)
+                guard let tool = ToolRegistry.byID[id] else { continue }
+                let toolView = ToolRouter(tool: tool)
+                    .environmentObject(model)
+                    .environment(\.colorScheme, scheme)
+                    .environment(\.satchelSnapshot, true)
+                    .frame(width: 980, height: 820)
+                    .background(Color(nsColor: .windowBackgroundColor))
+                let url = toolsFolder.appendingPathComponent("\(id.rawValue)-\(schemeName).png")
+                fputs("snapshot \(url.lastPathComponent)\n", stderr)
+                fflush(stderr)
+                do {
+                    try render(toolView, appearance: appearance, to: url, settle: 0.02)
+                } catch {
+                    fputs("Snapshot \(url.lastPathComponent) failed: \(error)\n", stderr)
+                    exit(1)
+                }
             }
             model.openTool = nil
         }
