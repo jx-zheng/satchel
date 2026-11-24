@@ -117,12 +117,7 @@ jobs:
           bytes=$(stat -f%z "$RUNNER_TEMP/demo/satchel-demo.mp4")
           echo "demo bytes=$bytes"
           test "$bytes" -ge 1000000
-          python3 - <<'PY'
-import os
-span = float(open(os.environ["RUNNER_TEMP"] + "/demo/demo-span.txt").read())
-print("demo span", span)
-assert 55 <= span <= 95, span
-PY
+          python3 ci/check_demo.py "$RUNNER_TEMP/demo/demo-span.txt"
       - name: Snapshot
         timeout-minutes: 25
         run: |
@@ -172,33 +167,7 @@ PY
           if [ -f "$RUNNER_TEMP/snap/perf.json" ]; then
             cat "$RUNNER_TEMP/snap/perf.json"
           fi
-          python3 - <<'PY'
-import json, os
-path = os.environ["RUNNER_TEMP"] + "/snap/perf.json"
-report = json.load(open(path))
-mib = 1024 * 1024
-first = float(report["firstLaunchSeconds"])
-median = float(report["coldLaunchMedianSeconds"])
-samples = report["launchSamples"]
-print("launch first", first, "median", median, "samples", samples)
-assert len(samples) == 6, samples
-assert first > 0.05 and median > 0.05, (first, median)
-assert all(sample > 0.05 for sample in samples), samples
-final = int(report["finalRSS"])
-base = int(report["afterTabsRSS"])
-gap = float(report["maxMainThreadGapSeconds"])
-print("rss final", round(final / mib, 1), "after tabs", round(base / mib, 1), "gap", gap)
-assert final < 200 * mib, final
-assert final <= base + 30 * mib, (final, base)
-assert gap < 0.1, gap
-tools = report["tools"]
-slowest = report["slowest"]
-assert len(tools) >= 90, len(tools)
-assert len(slowest) == 10, slowest
-print("slowest")
-for row in slowest:
-    print(f"{row['seconds']:.3f} {row['tool']}")
-PY
+          python3 ci/check_perf.py "$RUNNER_TEMP/snap/perf.json"
       - name: Upload snapshots
         if: always()
         uses: actions/upload-artifact@v4
