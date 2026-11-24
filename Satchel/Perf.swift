@@ -40,12 +40,23 @@ enum PerfRun {
         let window = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
         window.contentView = host
         window.orderFrontRegardless()
-        try? await Task.sleep(nanoseconds: 400_000_000)
+        host.layoutSubtreeIfNeeded()
+        try? await Task.sleep(nanoseconds: 600_000_000)
+        let categories: [ToolCategory?] = [nil] + ToolCategory.allCases.map { Optional($0) }
+        for category in categories {
+            model.category = category
+            model.openTool = nil
+            model.query = ""
+            try? await Task.sleep(nanoseconds: 80_000_000)
+        }
+        model.category = nil
+        model.openTool = nil
+        model.query = ""
+        try? await Task.sleep(nanoseconds: 200_000_000)
         report["idleRSS"] = MemoryFootprint.residentBytes()
         let stalls = StallWatch()
         stalls.start()
         var tabs: [[String: Any]] = []
-        let categories: [ToolCategory?] = [nil] + ToolCategory.allCases.map { Optional($0) }
         for category in categories {
             model.category = category
             model.openTool = nil
@@ -87,6 +98,9 @@ enum PerfRun {
             _ = try PDFJobs.compress(url: pdf, quality: 0.5, progress: { _ in })
             WorkRelease.drain()
             _ = try JSONFormat.pretty("{\"b\":1,\"a\":true}")
+            for url in [clip, image, pdf] {
+                try? FileManager.default.removeItem(at: url)
+            }
             WorkRelease.drain()
         } catch {
             report["fixtureError"] = error.localizedDescription

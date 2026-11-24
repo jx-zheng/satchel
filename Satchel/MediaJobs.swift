@@ -23,6 +23,7 @@ enum MediaExport {
             try FileManager.default.removeItem(at: output)
         }
         let reader = try AVAssetReader(asset: asset)
+        defer { reader.cancelReading() }
         if let timeRange, CMTimeGetSeconds(timeRange.duration) > 0 {
             reader.timeRange = timeRange
         }
@@ -113,11 +114,11 @@ enum MediaExport {
             if let videoComposition {
                 let composed = AVAssetReaderVideoCompositionOutput(videoTracks: videoTracks, videoSettings: pixels)
                 composed.videoComposition = videoComposition
-                composed.alwaysCopiesSampleData = true
+                composed.alwaysCopiesSampleData = false
                 output = composed
             } else {
                 let direct = AVAssetReaderTrackOutput(track: track, outputSettings: pixels)
-                direct.alwaysCopiesSampleData = true
+                direct.alwaysCopiesSampleData = false
                 output = direct
             }
             let hevc = preset == AVAssetExportPresetHEVC1920x1080

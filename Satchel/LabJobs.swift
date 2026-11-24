@@ -1,6 +1,7 @@
 import AppKit
 import CoreGraphics
 import Foundation
+import PDFKit
 import ScreenCaptureKit
 import SwiftUI
 import Translation
@@ -174,20 +175,17 @@ enum ScreenGrab {
 
 enum PhotoPDF {
     static func write(to url: URL, pages: Int, width: Int = 1400, height: Int = 900) throws {
-        let data = NSMutableData()
-        var box = CGRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(height))
-        guard let consumer = CGDataConsumer(data: data as CFMutableData),
-              let context = CGContext(consumer: consumer, mediaBox: &box, nil) else {
+        let document = PDFDocument()
+        for index in 0..<pages {
+            let image = try page(index: index, width: width, height: height)
+            let size = NSSize(width: CGFloat(image.width), height: CGFloat(image.height))
+            if let pdfPage = PDFPage(image: NSImage(cgImage: image, size: size)) {
+                document.insert(pdfPage, at: document.pageCount)
+            }
+        }
+        guard document.pageCount > 0, document.write(to: url) else {
             throw ToolError(message: "Could not write the photo PDF.")
         }
-        for index in 0..<pages {
-            let image = try autoreleasepool { try page(index: index, width: width, height: height) }
-            context.beginPDFPage(nil)
-            context.draw(image, in: box)
-            context.endPDFPage()
-        }
-        context.closePDF()
-        try (data as Data).write(to: url)
     }
 
     private static func page(index: Int, width: Int, height: Int) throws -> CGImage {

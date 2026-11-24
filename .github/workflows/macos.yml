@@ -153,7 +153,7 @@ jobs:
           test -n "$APP"
           mkdir -p "$RUNNER_TEMP/snap"
           rm -f "$RUNNER_TEMP/snap/leak.done" "$RUNNER_TEMP/snap/perf.json"
-          MallocStackLogging=1 "$APP/Contents/MacOS/Satchel" --perf "$RUNNER_TEMP/snap" &
+          "$APP/Contents/MacOS/Satchel" --perf "$RUNNER_TEMP/snap" &
           pid=$!
           for _ in $(seq 1 600); do
             if [ -f "$RUNNER_TEMP/snap/perf.json" ]; then
