@@ -265,6 +265,7 @@ private struct SpeechTool: View {
 }
 
 private struct TranslateTool: View {
+    @Environment(\.satchelSnapshot) private var snapshot
     @EnvironmentObject private var model: AppModel
     @State private var source = "en"
     @State private var target = "es"
@@ -299,7 +300,7 @@ private struct TranslateTool: View {
                 .foregroundStyle(.secondary)
             Text(message).foregroundStyle(.secondary)
         }
-        .translationTask(configuration) { session in
+        .translationTask(snapshot ? nil : configuration) { session in
             let text = await MainActor.run { model.draft(for: .translate) }
             let start = Date()
             do {

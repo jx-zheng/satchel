@@ -111,10 +111,11 @@ enum SpeechFixture {
         process.executableURL = URL(fileURLWithPath: "/usr/bin/say")
         process.arguments = ["-o", url.path, text]
         try process.run()
-        let deadline = Date().addingTimeInterval(20)
+        let deadline = Date().addingTimeInterval(12)
         while process.isRunning {
             if Date() > deadline {
                 process.terminate()
+                kill(process.processIdentifier, SIGKILL)
                 throw SkipSignal(reason: "speech synthesis timed out")
             }
             Thread.sleep(forTimeInterval: 0.05)

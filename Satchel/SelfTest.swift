@@ -8,6 +8,7 @@ import CoreMedia
 import CoreVideo
 import ImageIO
 import PDFKit
+import Speech
 import UniformTypeIdentifiers
 import SatchelCore
 
@@ -115,7 +116,7 @@ enum SelfTest {
                 once.run { continuation.resume(returning: -2) }
                 return
             }
-            DispatchQueue.global().asyncAfter(deadline: .now() + 140) {
+            DispatchQueue.global().asyncAfter(deadline: .now() + 60) {
                 if process.isRunning {
                     process.terminate()
                     kill(process.processIdentifier, SIGKILL)
@@ -132,7 +133,7 @@ enum SelfTest {
                 return line
             }
         }
-        if status == -1 { return report(tool.id, "FAIL", "timed out") }
+        if status == -1 { return report(tool.id, "FAIL", "timeout") }
         let tail = (try? String(contentsOf: log, encoding: .utf8))?
             .replacingOccurrences(of: "\n", with: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -329,6 +330,9 @@ enum SelfTest {
                 throw ToolError(message: "translation was empty")
             }
         case .screenshot:
+            if !CGPreflightScreenCaptureAccess() {
+                throw SkipSignal(reason: "needs screen recording permission")
+            }
             do {
                 _ = try await checkOne(ScreenGrab.capture(to: fixtures.folder))
             } catch let skip as SkipSignal {
@@ -337,6 +341,9 @@ enum SelfTest {
                 throw SkipSignal(reason: permissionReason(error, fallback: "screen capture was not granted"))
             }
         case .recordScreen:
+            if !CGPreflightScreenCaptureAccess() {
+                throw SkipSignal(reason: "needs screen recording permission")
+            }
             try await recordBriefly(fixtures)
         case .addPassword:
             _ = try check(PDFJobs.addPassword(url: fixtures.pdf, current: "", password: "test-pass"))
@@ -536,6 +543,9 @@ enum SelfTest {
 
     @MainActor
     private static func transcribeFixture(_ fixtures: FixtureSet) async throws {
+        if SFSpeechRecognizer.authorizationStatus() != .authorized {
+            throw SkipSignal(reason: "needs speech recognition permission")
+        }
         let spoken = fixtures.folder.appendingPathComponent("spoken.aiff")
         try SpeechFixture.say("Hello Satchel", to: spoken)
         do {

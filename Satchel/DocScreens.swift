@@ -442,7 +442,7 @@ private struct WebPDFTool: View {
             DropZone(prompt: "Or drop an HTML file", types: [.html], multiple: false) { urls in
                 if let url = urls.first { model.loadFile(url) }
             }
-            HiddenWeb(webView: model.webView)
+            WebPreview(model: model)
                 .frame(height: 220)
                 .clipShape(RoundedRectangle(cornerRadius: 12))
             HStack {
@@ -472,6 +472,19 @@ private struct WebPDFTool: View {
     }
 }
 
+private struct WebPreview: View {
+    @Environment(\.satchelSnapshot) private var snapshot
+    let model: WebPDFModel
+
+    var body: some View {
+        if snapshot {
+            Color(nsColor: .textBackgroundColor)
+        } else {
+            HiddenWeb(webView: model.webView)
+        }
+    }
+}
+
 private struct HiddenWeb: NSViewRepresentable {
     let webView: WKWebView
     func makeNSView(context: Context) -> WKWebView { webView }
@@ -479,15 +492,17 @@ private struct HiddenWeb: NSViewRepresentable {
 }
 
 final class WebPDFModel: NSObject, ObservableObject, WKNavigationDelegate {
-    let webView: WKWebView
     @Published var busy = false
     private var continuation: CheckedContinuation<Data, Error>?
+    private var storage: WKWebView?
 
-    override init() {
+    var webView: WKWebView {
+        if let storage { return storage }
         let configuration = WKWebViewConfiguration()
-        webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 900, height: 1200), configuration: configuration)
-        super.init()
-        webView.navigationDelegate = self
+        let view = WKWebView(frame: NSRect(x: 0, y: 0, width: 900, height: 1200), configuration: configuration)
+        view.navigationDelegate = self
+        storage = view
+        return view
     }
 
     func load(address: String) {

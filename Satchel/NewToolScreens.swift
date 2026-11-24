@@ -311,6 +311,7 @@ struct AskDocumentTool: View {
 }
 
 struct DisplayControlTool: View {
+    @Environment(\.satchelSnapshot) private var snapshot
     @State private var lines: [DisplayModeLine] = []
     @State private var brightness: Float?
     @State private var original: Float?
@@ -366,7 +367,9 @@ struct DisplayControlTool: View {
                 Text(message).font(.caption).foregroundStyle(.secondary)
             }
         }
-        .onAppear { refresh() }
+        .onAppear {
+            if !snapshot { refresh() }
+        }
         .onDisappear { restore() }
     }
 

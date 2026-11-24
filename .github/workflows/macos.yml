@@ -18,6 +18,7 @@ concurrency:
 jobs:
   before:
     runs-on: macos-15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - name: Keep the before snapshotter
@@ -43,6 +44,7 @@ jobs:
           CODE_SIGNING_REQUIRED=NO
           build
       - name: Snapshot the previous design
+        timeout-minutes: 15
         run: |
           set -euo pipefail
           APP="$(find "$RUNNER_TEMP/dd/Build/Products/Release" -name 'Satchel.app' -type d | head -1)"
@@ -61,6 +63,7 @@ jobs:
 
   build:
     runs-on: macos-15
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - name: Install XcodeGen
@@ -79,6 +82,7 @@ jobs:
           build
       - name: Snapshot and self-test
         id: verify
+        timeout-minutes: 25
         run: |
           set -euo pipefail
           APP="$(find "$RUNNER_TEMP/dd/Build/Products/Release" -name 'Satchel.app' -type d | head -1)"
@@ -97,6 +101,7 @@ jobs:
           echo "selftest=$code" >> "$GITHUB_OUTPUT"
       - name: Performance
         if: always()
+        timeout-minutes: 15
         run: |
           set -euo pipefail
           APP="$(find "$RUNNER_TEMP/dd/Build/Products/Release" -name 'Satchel.app' -type d | head -1)"

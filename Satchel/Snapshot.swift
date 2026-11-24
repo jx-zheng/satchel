@@ -106,6 +106,8 @@ enum Snapshotter {
             .environment(\.satchelSnapshot, true)
             .environment(\.satchelSampleResult, sample)
             .frame(width: 1440, height: 900)
+        fputs("snapshot \(url.lastPathComponent)\n", stderr)
+        fflush(stderr)
         do {
             try render(view, appearance: appearance, to: url, settle: settle)
         } catch {
