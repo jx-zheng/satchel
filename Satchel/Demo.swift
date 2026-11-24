@@ -35,9 +35,12 @@ struct DemoRoot: View {
 
     private func center() {
         DispatchQueue.main.async {
+            NSApp.setActivationPolicy(.regular)
+            NSApp.activate()
             for window in NSApp.windows where window.isVisible || window.contentView != nil {
                 window.setContentSize(NSSize(width: 1280, height: 840))
                 window.center()
+                window.makeKeyAndOrderFront(nil)
             }
         }
     }
@@ -55,53 +58,69 @@ enum DemoScript {
         }
         if let fixtures {
             DemoSession.files[.compressVideo] = [fixtures.video]
+            DemoSession.files[.convertAudio] = [fixtures.audio]
             DemoSession.files[.mergePDFs] = [fixtures.pdf, fixtures.pdf]
-            DemoSession.files[.redactPDF] = [fixtures.pdf]
             DemoSession.files[.extractText] = [fixtures.labeled]
             DemoSession.files[.batchRename] = [fixtures.notes]
+            let srt = samples.appendingPathComponent("cues.srt")
+            try? "1\n00:00:00,200 --> 00:00:02,000\nHELLO\n".write(to: srt, atomically: true, encoding: .utf8)
+            DemoSession.files[.burnSubtitles] = [fixtures.video, srt]
         }
+        model.setDraft(.markdownToPDF, "# Notes\n\nA short page, made on this Mac.")
+        model.setDraft(.summarize, "Cats sleep in warm sun. Cats sleep in warm sun. Trains cross the valley at dusk. Trains cross the valley at dusk.")
         model.setDraft(.jsonFormatter, "{\"name\":\"Satchel\",\"offline\":true}")
         DemoSession.enabled = true
+        await pause(0.6)
         let recorder = DisplayRecorder()
         if record {
             await recorder.start()
         }
-        await pause(2)
+        if Launch.demoSmoke {
+            try? "draft smoke, not the deliverable".write(to: folder.appendingPathComponent("demo-draft.txt"), atomically: true, encoding: .utf8)
+            model.selectTab(.video)
+            await pause(1.2)
+            for character in "pdf" {
+                model.query.append(character)
+                await pause(0.2)
+            }
+            await pause(0.8)
+            model.query = ""
+            await open(.compressVideo, model, seconds: 3)
+            model.closeTool()
+            await pause(0.6)
+            if record, let movie = await recorder.stop() {
+                try? await transcode(movie, to: folder.appendingPathComponent("satchel-demo.mp4"))
+            }
+            return
+        }
+        await pause(0.4)
         for category in ToolCategory.allCases {
             model.selectTab(category)
-            await pause(1.2)
+            await pause(0.7)
         }
         model.selectTab(nil)
-        await pause(0.6)
+        await pause(0.4)
         for character in "pdf" {
             model.query.append(character)
-            await pause(0.35)
+            await pause(0.25)
         }
-        await pause(1.4)
+        await pause(1.0)
         model.query = ""
-        await pause(0.4)
-        await open(.compressVideo, model, seconds: 7)
-        await open(.removeBackground, model, seconds: 7)
-        await open(.mergePDFs, model, seconds: 6)
-        await open(.redactPDF, model, seconds: 6)
-        await open(.extractText, model, seconds: 5)
-        await open(.qrCode, model, seconds: 4)
-        await open(.jsonFormatter, model, seconds: 4)
-        await open(.batteryHealth, model, seconds: 4)
-        await open(.batchRename, model, seconds: 5)
+        await pause(0.3)
+        await open(.compressVideo, model, seconds: 5)
+        await open(.burnSubtitles, model, seconds: 5)
+        await open(.convertAudio, model, seconds: 4)
+        await open(.mergePDFs, model, seconds: 4)
+        await open(.markdownToPDF, model, seconds: 4)
+        await open(.summarize, model, seconds: 4)
+        await open(.extractText, model, seconds: 4)
+        await open(.batchRename, model, seconds: 4)
         model.closeTool()
         model.selectTab(nil)
-        await pause(1.5)
+        await pause(1.0)
         if record, let movie = await recorder.stop() {
-            let mp4 = folder.appendingPathComponent("satchel-demo.mp4")
             do {
-                try await MediaExport.export(
-                    asset: AVURLAsset(url: movie),
-                    output: mp4,
-                    fileType: .mp4,
-                    preset: AVAssetExportPresetLowQuality,
-                    progress: { _ in }
-                )
+                try await transcode(movie, to: folder.appendingPathComponent("satchel-demo.mp4"))
             } catch {
                 try? "transcode failed: \(error.localizedDescription)".write(
                     to: folder.appendingPathComponent("demo-note.txt"),
@@ -116,6 +135,16 @@ enum DemoScript {
                 encoding: .utf8
             )
         }
+    }
+
+    private static func transcode(_ movie: URL, to mp4: URL) async throws {
+        try await MediaExport.export(
+            asset: AVURLAsset(url: movie),
+            output: mp4,
+            fileType: .mp4,
+            preset: AVAssetExportPresetMediumQuality,
+            progress: { _ in }
+        )
     }
 
     @MainActor

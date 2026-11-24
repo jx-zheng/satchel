@@ -902,55 +902,100 @@ enum MediaJobs {
         guard let track = try await asset.loadTracks(withMediaType: .audio).first else {
             throw ToolError(message: "That file has no audio track.")
         }
-        let reader = try AVAssetReader(asset: asset)
-        let settings: [String: Any] = [
-            AVFormatIDKey: kAudioFormatLinearPCM,
-            AVSampleRateKey: 44_100,
-            AVNumberOfChannelsKey: 2,
-            AVLinearPCMBitDepthKey: 16,
-            AVLinearPCMIsFloatKey: false,
-            AVLinearPCMIsBigEndianKey: false,
-            AVLinearPCMIsNonInterleaved: false
-        ]
-        let outputTrack = AVAssetReaderTrackOutput(track: track, outputSettings: settings)
-        outputTrack.alwaysCopiesSampleData = false
-        guard reader.canAdd(outputTrack) else { throw ToolError(message: "Could not read that audio.") }
-        reader.add(outputTrack)
-        guard reader.startReading() else {
-            throw ToolError(message: reader.error?.localizedDescription ?? "Could not read that audio.")
+        let duration = CMTimeGetSeconds(try await asset.load(.duration))
+        let ext = output.pathExtension.lowercased()
+        let fileType: AVFileType
+        switch ext {
+        case "aiff", "aif": fileType = .aiff
+        case "caf": fileType = .caf
+        default: fileType = .wav
         }
-        guard let format = AVAudioFormat(settings: settings) else {
-            throw ToolError(message: "Could not prepare a PCM file.")
+        let bigEndian = fileType == .aiff
+        var last = ToolError(message: "Could not write that audio file.")
+        for channels in [1, 2] {
+            do {
+                try await writePCMFile(asset: asset, track: track, output: output, fileType: fileType, channels: channels, bigEndian: bigEndian, duration: duration, progress: progress)
+                return
+            } catch {
+                last = ToolError(message: error.localizedDescription)
+                try? FileManager.default.removeItem(at: output)
+            }
         }
+        throw last
+    }
+
+    private static func writePCMFile(
+        asset: AVAsset,
+        track: AVAssetTrack,
+        output: URL,
+        fileType: AVFileType,
+        channels: Int,
+        bigEndian: Bool,
+        duration: Double,
+        progress: @escaping (Double) -> Void
+    ) async throws {
         if FileManager.default.fileExists(atPath: output.path) {
             try FileManager.default.removeItem(at: output)
         }
-        let file = try AVAudioFile(forWriting: output, settings: format.settings)
-        let duration = CMTimeGetSeconds(try await asset.load(.duration))
-        while let sample = outputTrack.copyNextSampleBuffer() {
-            try append(sample, format: format, to: file)
-            if duration > 0 {
-                let time = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sample))
-                progress(min(1, time / duration))
+        let settings: [String: Any] = [
+            AVFormatIDKey: kAudioFormatLinearPCM,
+            AVSampleRateKey: 44_100,
+            AVNumberOfChannelsKey: channels,
+            AVLinearPCMBitDepthKey: 16,
+            AVLinearPCMIsFloatKey: false,
+            AVLinearPCMIsBigEndianKey: bigEndian,
+            AVLinearPCMIsNonInterleaved: false
+        ]
+        let reader = try AVAssetReader(asset: asset)
+        let readerOutput = AVAssetReaderTrackOutput(track: track, outputSettings: settings)
+        readerOutput.alwaysCopiesSampleData = true
+        guard reader.canAdd(readerOutput) else { throw ToolError(message: "Could not read that audio.") }
+        reader.add(readerOutput)
+        let writer = try AVAssetWriter(outputURL: output, fileType: fileType)
+        let input = AVAssetWriterInput(mediaType: .audio, outputSettings: settings)
+        input.expectsMediaDataInRealTime = false
+        guard writer.canAdd(input) else { throw ToolError(message: "Could not prepare a \(fileType.rawValue) file.") }
+        writer.add(input)
+        guard reader.startReading() else {
+            throw ToolError(message: reader.error?.localizedDescription ?? "Could not read that audio.")
+        }
+        guard writer.startWriting() else {
+            throw ToolError(message: writer.error?.localizedDescription ?? "Could not start the audio file.")
+        }
+        writer.startSession(atSourceTime: .zero)
+        let queue = DispatchQueue(label: "satchel.pcm")
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            let gate = ResumeGate()
+            input.requestMediaDataWhenReady(on: queue) {
+                while input.isReadyForMoreMediaData {
+                    if let sample = readerOutput.copyNextSampleBuffer() {
+                        if !input.append(sample) {
+                            input.markAsFinished()
+                            gate.fail(continuation, ToolError(message: writer.error?.localizedDescription ?? "Could not write audio samples."))
+                            return
+                        }
+                        if duration > 0 {
+                            let time = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sample))
+                            progress(min(0.99, max(0, time / duration)))
+                        }
+                    } else {
+                        input.markAsFinished()
+                        writer.finishWriting {
+                            if writer.status == .completed {
+                                progress(1)
+                                gate.resume(continuation)
+                            } else {
+                                gate.fail(continuation, ToolError(message: writer.error?.localizedDescription ?? reader.error?.localizedDescription ?? "Could not finish the audio file."))
+                            }
+                        }
+                        return
+                    }
+                }
+            }
+            queue.asyncAfter(deadline: .now() + 60) {
+                gate.fail(continuation, ToolError(message: "Audio conversion timed out."))
             }
         }
-        if reader.status == .failed {
-            throw ToolError(message: reader.error?.localizedDescription ?? "Could not finish the audio file.")
-        }
-    }
-
-    private static func append(_ sample: CMSampleBuffer, format: AVAudioFormat, to file: AVAudioFile) throws {
-        let frames = AVAudioFrameCount(CMSampleBufferGetNumSamples(sample))
-        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames) else { return }
-        buffer.frameLength = frames
-        let status = CMSampleBufferCopyPCMDataIntoAudioBufferList(
-            sample,
-            at: 0,
-            frameCount: Int32(frames),
-            into: buffer.mutableAudioBufferList
-        )
-        if status != noErr { throw ToolError(message: "Could not copy audio samples.") }
-        try file.write(from: buffer)
     }
 }
 

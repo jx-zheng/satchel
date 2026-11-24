@@ -377,15 +377,22 @@ enum PDFJobs {
     }
 
     static func markdown(_ text: String, nextTo: URL?) async throws -> URL {
-        let attributed = MarkdownRender.attributed(text)
+        let html = MarkdownHTML.page(text)
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: temp) }
+        let rendered = try await WebProbe.pdf(html: html, in: temp)
         let output: URL
         if let nextTo {
             output = try Outputs.make(nextTo: nextTo, suffix: "-notes", ext: "pdf")
         } else {
             let folder = try Outputs.directory(in: .downloadsDirectory, subfolder: "Satchel")
             output = folder.appendingPathComponent("Notes.pdf")
+            if FileManager.default.fileExists(atPath: output.path) {
+                try FileManager.default.removeItem(at: output)
+            }
         }
-        try await renderAttributed(attributed, to: output)
+        try FileManager.default.copyItem(at: rendered, to: output)
         return output
     }
 
@@ -407,7 +414,7 @@ enum PDFJobs {
             attributed = try NSAttributedString(url: url, options: [.documentType: type], documentAttributes: nil)
         }
         let output = try Outputs.make(nextTo: url, suffix: "-print", ext: "pdf")
-        try await renderAttributed(attributed, to: output)
+        try renderCoreText(attributed, to: output)
         return output
     }
 
@@ -462,34 +469,35 @@ enum PDFJobs {
         return data as Data
     }
 
-    @MainActor
-    private static func renderAttributed(_ text: NSAttributedString, to url: URL) throws {
-        let printInfo = NSPrintInfo.shared.copy() as? NSPrintInfo ?? NSPrintInfo()
-        printInfo.paperSize = NSSize(width: 612, height: 792)
-        printInfo.topMargin = 54
-        printInfo.bottomMargin = 54
-        printInfo.leftMargin = 54
-        printInfo.rightMargin = 54
-        printInfo.isHorizontallyCentered = false
-        printInfo.isVerticallyCentered = false
-        let width = printInfo.paperSize.width - printInfo.leftMargin - printInfo.rightMargin
-        let view = NSTextView(frame: NSRect(x: 0, y: 0, width: width, height: 10_000))
-        view.textContainer?.widthTracksTextView = true
-        view.textContainer?.containerSize = NSSize(width: width, height: .greatestFiniteMagnitude)
-        view.textStorage?.setAttributedString(text)
-        view.isEditable = false
-        if let container = view.textContainer {
-            view.layoutManager?.ensureLayout(for: container)
-        }
-        let data = NSMutableData()
-        let printable = NSRect(x: 0, y: 0, width: width, height: 10_000)
-        let operation = NSPrintOperation.pdfOperation(with: view, inside: printable, to: data, printInfo: printInfo)
-        operation.showsPrintPanel = false
-        operation.showsProgressPanel = false
-        if !operation.run() {
+    static func renderCoreText(_ text: NSAttributedString, to url: URL) throws {
+        var media = CGRect(x: 0, y: 0, width: 612, height: 792)
+        guard let context = CGContext(url as CFURL, mediaBox: &media, nil) else {
             throw ToolError(message: "Could not write the PDF.")
         }
-        try (data as Data).write(to: url)
+        let margin: CGFloat = 54
+        let framesetter = CTFramesetterCreateWithAttributedString(text.length == 0 ? NSAttributedString(string: " ") : text)
+        var index = 0
+        var guardPages = 0
+        let length = max((text.length == 0 ? 1 : text.length), 1)
+        while index < length && guardPages < 80 {
+            context.beginPDFPage(nil)
+            context.setFillColor(CGColor(gray: 1, alpha: 1))
+            context.fill(media)
+            context.saveGState()
+            context.translateBy(x: 0, y: media.height)
+            context.scaleBy(x: 1, y: -1)
+            let textRect = CGRect(x: margin, y: margin, width: media.width - margin * 2, height: media.height - margin * 2)
+            let path = CGPath(rect: textRect, transform: nil)
+            let frame = CTFramesetterCreateFrame(framesetter, CFRange(location: index, length: 0), path, nil)
+            CTFrameDraw(frame, context)
+            context.restoreGState()
+            let visible = CTFrameGetVisibleStringRange(frame)
+            context.endPDFPage()
+            guardPages += 1
+            if visible.length <= 0 { break }
+            index += visible.length
+        }
+        context.closePDF()
     }
 
     private static func docxText(_ url: URL) throws -> String {

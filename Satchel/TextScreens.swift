@@ -14,6 +14,8 @@ struct TextToolScreen: View {
         case .captureText: CaptureTextTool()
         case .textToSpeech: SpeechTool()
         case .translate: TranslateTool()
+        case .summarize: SummarizeTool()
+        case .askDocument: AskDocumentTool()
         default:
             if let tool = ToolRegistry.byID[id] { ComingSoonView(tool: tool) }
         }

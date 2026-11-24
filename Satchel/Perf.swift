@@ -24,15 +24,18 @@ enum PerfRun {
         let folder = URL(fileURLWithPath: directory, isDirectory: true)
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         var report: [String: Any] = [:]
+        report["coldLaunchSeconds"] = Date().timeIntervalSince(Launch.booted)
         report["launchToFirstFrameSeconds"] = Date().timeIntervalSince(Launch.booted)
-        report["idleRSS"] = MemoryFootprint.residentBytes()
         let model = AppModel(persists: false)
         let host = NSHostingView(rootView: RootView().environmentObject(model).frame(width: 1440, height: 900))
         host.frame = NSRect(x: 0, y: 0, width: 1440, height: 900)
         let window = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
         window.contentView = host
         window.orderFrontRegardless()
-        try? await Task.sleep(nanoseconds: 300_000_000)
+        try? await Task.sleep(nanoseconds: 400_000_000)
+        report["idleRSS"] = MemoryFootprint.residentBytes()
+        let stalls = StallWatch()
+        stalls.start()
         var tabs: [[String: Any]] = []
         let categories: [ToolCategory?] = [nil] + ToolCategory.allCases.map { Optional($0) }
         for category in categories {
@@ -46,8 +49,10 @@ enum PerfRun {
                 "rss": MemoryFootprint.residentBytes()
             ])
         }
+        stalls.stop()
         report["tabs"] = tabs
         report["afterTabsRSS"] = MemoryFootprint.residentBytes()
+        report["maxMainThreadGapSeconds"] = stalls.maxGap
         var tools: [[String: Any]] = []
         do {
             let clip = folder.appendingPathComponent("perf-clip.mov")
@@ -94,6 +99,30 @@ enum PerfRun {
             "seconds": Date().timeIntervalSince(start),
             "rss": MemoryFootprint.residentBytes()
         ]
+    }
+}
+
+final class StallWatch {
+    private(set) var maxGap = 0.0
+    private var timer: Timer?
+    private var last = Date()
+
+    func start() {
+        last = Date()
+        let timer = Timer(timeInterval: 0.02, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            let now = Date()
+            let gap = now.timeIntervalSince(self.last)
+            if gap > self.maxGap { self.maxGap = gap }
+            self.last = now
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
+    }
+
+    func stop() {
+        timer?.invalidate()
+        timer = nil
     }
 }
 

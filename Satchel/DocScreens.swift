@@ -28,6 +28,10 @@ struct DocToolScreen: View {
         case .wordToPDF: WordPDFTool()
         case .markdownToPDF: MarkdownPDFTool()
         case .webPageToPDF: WebPDFTool()
+        case .pdfToWord: PDFToWordTool()
+        case .convertDocuments: ConvertDocumentsTool()
+        case .powerpointToPDF: PowerPointPDFTool()
+        case .excelToPDF: ExcelPDFTool()
         default:
             if let tool = ToolRegistry.byID[id] { ComingSoonView(tool: tool) }
         }
@@ -375,7 +379,7 @@ private struct ScanTool: View {
 private struct WordPDFTool: View {
     var body: some View {
         FileJobView(tool: .wordToPDF, types: [UTType(filenameExtension: "docx") ?? .data, .rtf, .plainText, .html], prompt: "Drop a Word, RTF, HTML, or text file", actionTitle: "Make PDF", multiple: false) {
-            Text("Word files keep their paragraphs. Complex layouts are simplified.")
+            Text("Drawn with Core Text into a PDF. Complex Word layouts are simplified. Nothing is sent off this Mac.")
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
         } perform: { urls, _ in
@@ -408,6 +412,21 @@ private struct MarkdownPDFTool: View {
                 }
             }
             Text(message).foregroundStyle(.secondary)
+        }
+        .onAppear {
+            guard DemoSession.enabled, DemoSession.take(.markdownToPDF) else { return }
+            let draft = model.draft(for: .markdownToPDF)
+            guard !draft.isEmpty else { return }
+            Task {
+                do {
+                    let folder = try Outputs.directory(in: .downloadsDirectory, subfolder: "Satchel")
+                    let stub = folder.appendingPathComponent("notes.md")
+                    let output = try await PDFJobs.markdown(draft, nextTo: stub)
+                    message = "Saved \(output.lastPathComponent) in Downloads/Satchel"
+                } catch {
+                    message = error.localizedDescription
+                }
+            }
         }
     }
 }

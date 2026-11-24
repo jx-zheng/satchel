@@ -7,14 +7,57 @@ on:
       - "SatchelCore/**"
       - "project.yml"
       - "scripts/**"
+      - "ci/**"
       - ".github/workflows/macos.yml"
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
+  before:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Keep the before snapshotter
+        run: cp ci/BeforeSnapshot.swift /tmp/BeforeSnapshot.swift
+      - name: Restore the main sources
+        run: |
+          rm -rf Satchel SatchelCore
+          git checkout b154b93f62fd0f8efd5d1aa5ddf0bffeb1c9f773 -- Satchel SatchelCore project.yml
+          cp /tmp/BeforeSnapshot.swift Satchel/Snapshot.swift
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate project
+        run: xcodegen generate
+      - name: Build
+        run: >
+          xcodebuild
+          -project Satchel.xcodeproj
+          -scheme Satchel
+          -configuration Release
+          -derivedDataPath "$RUNNER_TEMP/dd"
+          CODE_SIGNING_ALLOWED=NO
+          CODE_SIGNING_REQUIRED=NO
+          build
+      - name: Snapshot the previous design
+        run: |
+          set -euo pipefail
+          APP="$(find "$RUNNER_TEMP/dd/Build/Products/Release" -name 'Satchel.app' -type d | head -1)"
+          test -n "$APP"
+          codesign --force --deep --sign - "$APP" || true
+          mkdir -p "$RUNNER_TEMP/before"
+          "$APP/Contents/MacOS/Satchel" --snapshot "$RUNNER_TEMP/before"
+          find "$RUNNER_TEMP/before" -name 'before-*.png' | sort
+      - name: Upload before snapshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: satchel-redesign-before
+          path: ${{ runner.temp }}/before
+          if-no-files-found: error
+
   build:
     runs-on: macos-15
     steps:
@@ -70,6 +113,9 @@ jobs:
           leaks "$pid" -quiet > "$RUNNER_TEMP/snap/leaks.txt" || true
           touch "$RUNNER_TEMP/snap/leak.done"
           wait "$pid" || true
+          if [ -f "$RUNNER_TEMP/snap/perf.json" ]; then
+            cat "$RUNNER_TEMP/snap/perf.json"
+          fi
       - name: Upload snapshots
         if: always()
         uses: actions/upload-artifact@v4
@@ -77,6 +123,50 @@ jobs:
           name: satchel-snapshots
           path: ${{ runner.temp }}/snap
           if-no-files-found: error
+      - name: Upload tool screens
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: satchel-tool-screens
+          path: ${{ runner.temp }}/snap/tools
+          if-no-files-found: error
+      - name: Upload redesign after
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: satchel-redesign-after
+          path: ${{ runner.temp }}/snap/redesign
+          if-no-files-found: error
       - name: Require self-test
         if: always()
         run: test "${{ steps.verify.outputs.selftest }}" = "0"
+      - name: Require no leaks
+        if: always()
+        run: |
+          set -euo pipefail
+          FILE="$RUNNER_TEMP/snap/leaks.txt"
+          test -f "$FILE"
+          if grep -E '^[1-9][0-9]* leak' "$FILE"; then
+            echo "leaks reported allocated memory that was not freed"
+            exit 1
+          fi
+
+  redesign:
+    needs: [before, build]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: satchel-redesign-before
+          path: redesign
+      - uses: actions/download-artifact@v4
+        with:
+          name: satchel-redesign-after
+          path: redesign
+      - name: Upload redesign comparison
+        uses: actions/upload-artifact@v4
+        with:
+          name: satchel-redesign
+          path: redesign
+          if-no-files-found: error

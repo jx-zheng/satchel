@@ -2,6 +2,11 @@ name: Demo
 
 on:
   workflow_dispatch:
+    inputs:
+      smoke:
+        description: Draft smoke only. Not the deliverable.
+        type: boolean
+        default: true
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -33,13 +38,37 @@ jobs:
           test -n "$APP"
           codesign --force --deep --sign - "$APP" || true
           mkdir -p "$RUNNER_TEMP/demo"
-          "$APP/Contents/MacOS/Satchel" --demo "$RUNNER_TEMP/demo" || true
+          SMOKE="${{ github.event.inputs.smoke }}"
+          EXTRA=()
+          LIMIT=180
+          if [ "$SMOKE" != "false" ]; then
+            EXTRA+=(--demo-smoke)
+            LIMIT=60
+            printf 'draft smoke, not the deliverable\n' > "$RUNNER_TEMP/demo/demo-draft.txt"
+          fi
+          # Launch the bundle so the Dock shows the app icon.
+          open "$APP" --args --demo "$RUNNER_TEMP/demo" "${EXTRA[@]}"
+          for _ in $(seq 1 30); do
+            pgrep -x Satchel >/dev/null && break
+            sleep 1
+          done
+          for _ in $(seq 1 "$LIMIT"); do
+            if [ -f "$RUNNER_TEMP/demo/satchel-demo.mp4" ]; then
+              break
+            fi
+            pgrep -x Satchel >/dev/null || break
+            sleep 1
+          done
           if [ ! -f "$RUNNER_TEMP/demo/satchel-demo.mp4" ]; then
-            screencapture -v -V 115 "$RUNNER_TEMP/demo/raw.mov" &
+            screencapture -v -V 25 "$RUNNER_TEMP/demo/raw.mov" &
             cap=$!
             sleep 1
-            "$APP/Contents/MacOS/Satchel" --demo "$RUNNER_TEMP/demo" --demo-norecord || true
+            open "$APP" --args --demo "$RUNNER_TEMP/demo" --demo-norecord "${EXTRA[@]}"
             wait "$cap" || true
+            for _ in $(seq 1 "$LIMIT"); do
+              pgrep -x Satchel >/dev/null || break
+              sleep 1
+            done
           fi
           test -f "$RUNNER_TEMP/demo/satchel-demo.mp4" -o -f "$RUNNER_TEMP/demo/raw.mov"
           find "$RUNNER_TEMP/demo" -type f -exec ls -lh {} \;
@@ -47,6 +76,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: satchel-demo
+          name: ${{ github.event.inputs.smoke == 'false' && 'satchel-demo' || 'satchel-demo-draft' }}
           path: ${{ runner.temp }}/demo
           if-no-files-found: error

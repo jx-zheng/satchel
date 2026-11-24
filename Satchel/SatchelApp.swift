@@ -17,6 +17,7 @@ enum SatchelMain {
 }
 
 struct SatchelApp: App {
+    @NSApplicationDelegateAdaptor(SatchelDelegate.self) private var delegate
     @StateObject private var model = AppModel()
 
     var body: some Scene {
@@ -34,11 +35,23 @@ struct SatchelApp: App {
             } else {
                 RootView()
                     .environmentObject(model)
+                    .onOpenURL { url in
+                        model.incomingFiles = [url]
+                    }
             }
         }
-        .windowStyle(.hiddenTitleBar)
-        .defaultSize(width: 1280, height: 840)
+        .defaultSize(width: 1180, height: 780)
         .commands {
+            CommandGroup(after: .newItem) {
+                Button("Open File…") {
+                    NotificationCenter.default.post(name: .satchelOpenPanel, object: nil)
+                }
+                .keyboardShortcut("o", modifiers: .command)
+                Button("Run") {
+                    NotificationCenter.default.post(name: .satchelRun, object: nil)
+                }
+                .keyboardShortcut(.return, modifiers: .command)
+            }
             CommandGroup(after: .sidebar) {
                 Button("Search Tools") {
                     model.focusSearch()
@@ -49,6 +62,15 @@ struct SatchelApp: App {
     }
 }
 
+final class SatchelDelegate: NSObject, NSApplicationDelegate {
+    func application(_ application: NSApplication, open urls: [URL]) {
+        for url in urls {
+            _ = url.startAccessingSecurityScopedResource()
+        }
+        NotificationCenter.default.post(name: .satchelIncomingFiles, object: urls)
+    }
+}
+
 enum Launch {
     static let booted = Date()
 
@@ -56,6 +78,10 @@ enum Launch {
 
     static var demoSkipsRecording: Bool {
         CommandLine.arguments.contains("--demo-norecord")
+    }
+
+    static var demoSmoke: Bool {
+        CommandLine.arguments.contains("--demo-smoke")
     }
 
     static var demoDirectory: String? { flag("--demo") }

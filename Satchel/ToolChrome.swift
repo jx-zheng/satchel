@@ -8,56 +8,60 @@ struct ToolError: LocalizedError {
     var errorDescription: String? { message }
 }
 
-struct ToolPage<Content: View>: View {
+struct ToolScaffold<Content: View>: View {
     @EnvironmentObject private var model: AppModel
-    @Environment(\.colorScheme) private var scheme
     let tool: ToolDefinition
     @ViewBuilder var content: () -> Content
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 18) {
                 HStack {
                     Button {
                         model.closeTool()
                     } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "chevron.left")
-                            Text(model.category?.title ?? "All")
-                        }
-                        .font(.system(size: 13, weight: .medium))
+                        Label(model.category?.title ?? "All", systemImage: "chevron.left")
+                            .font(.callout)
+                            .labelStyle(.titleAndIcon)
                     }
                     .buttonStyle(.plain)
-                    .foregroundStyle(Palette.secondaryText(scheme))
+                    .foregroundStyle(.secondary)
                     Spacer()
                     Button {
                         model.toggleFavorite(tool.id)
                     } label: {
                         Image(systemName: model.isFavorite(tool.id) ? "star.fill" : "star")
-                            .foregroundStyle(model.isFavorite(tool.id) ? Color.yellow : Palette.secondaryText(scheme))
+                            .foregroundStyle(model.isFavorite(tool.id) ? Color.yellow : Color.secondary)
                     }
                     .buttonStyle(.plain)
                     .help(model.isFavorite(tool.id) ? "Remove from Favorites" : "Add to Favorites")
                 }
-                HStack(alignment: .firstTextBaseline, spacing: 10) {
-                    Image(systemName: tool.symbol)
-                        .font(.system(size: 22, weight: .semibold))
-                        .foregroundStyle(Palette.accent)
+                HStack(alignment: .center, spacing: 12) {
+                    ToolArt(tool: tool, compact: true)
+                        .frame(width: 36, height: 36)
                     Text(tool.name)
-                        .font(.system(size: 28, weight: .bold))
+                        .font(.title.weight(.semibold))
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 Text(tool.summary)
-                    .font(.system(size: 14))
-                    .foregroundStyle(Palette.secondaryText(scheme))
+                    .font(.body)
+                    .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 content()
+                Text("⌘O chooses a file · ⌘↩ runs · ⎋ cancels")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .padding(.top, 4)
             }
             .padding(28)
-            .frame(maxWidth: 880, alignment: .leading)
-            .frame(maxWidth: .infinity)
+            .frame(maxWidth: 720, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .focusSection()
     }
 }
+
+typealias ToolPage = ToolScaffold
 
 struct ComingSoonView: View {
     let tool: ToolDefinition
@@ -79,21 +83,45 @@ struct ComingSoonView: View {
 }
 
 struct PrimaryButton: View {
+    @EnvironmentObject private var model: AppModel
     var title: String
     var enabled: Bool = true
+    var registersRun = true
     var action: () -> Void
+    @State private var token = UUID().uuidString
+
+    private var claimsRun: Bool {
+        guard registersRun else { return false }
+        let lower = title.lowercased()
+        let blocked = ["trash", "eject", "reset", "quarantine"]
+        return !blocked.contains { lower.contains($0) }
+    }
 
     var body: some View {
         Button(action: action) {
             Text(title)
-                .font(.system(size: 14, weight: .semibold))
+                .font(.body.weight(.semibold))
                 .foregroundStyle(.white)
-                .padding(.horizontal, 18)
-                .padding(.vertical, 9)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
                 .background(Capsule().fill(enabled ? Palette.accent : Palette.accent.opacity(0.35)))
+                .contentShape(Capsule())
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
+        .onAppear { claim() }
+        .onDisappear {
+            if model.runClaim == token { model.runClaim = nil }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .satchelRun)) { _ in
+            guard model.runClaim == token, enabled else { return }
+            action()
+        }
+    }
+
+    private func claim() {
+        guard claimsRun, model.runClaim == nil else { return }
+        model.runClaim = token
     }
 }
 
@@ -149,6 +177,7 @@ struct DropZone: View {
 
 struct FileJobView<Controls: View>: View {
     @EnvironmentObject private var model: AppModel
+    @Environment(\.satchelSampleResult) private var sampleResult
     let tool: ToolID
     var types: [UTType]
     var prompt: String
@@ -164,6 +193,7 @@ struct FileJobView<Controls: View>: View {
     @State private var running = false
     @State private var progress = 0.0
     @State private var errorText: String?
+    @State private var task: Task<Void, Never>?
 
     var body: some View {
         let definition = ToolRegistry.definition(tool)
@@ -174,12 +204,30 @@ struct FileJobView<Controls: View>: View {
                 errorText = nil
                 onFiles(picked)
             }
-            if !urls.isEmpty {
+            if urls.isEmpty {
+                Text("Nothing selected yet.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            } else {
                 VStack(alignment: .leading, spacing: 4) {
                     ForEach(urls, id: \.path) { url in
-                        Text(url.lastPathComponent)
-                            .font(.system(size: 12))
-                            .lineLimit(1)
+                        HStack {
+                            Image(systemName: "doc")
+                                .foregroundStyle(.secondary)
+                            Text(url.lastPathComponent)
+                                .font(.callout)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            Spacer()
+                            Button {
+                                urls.removeAll { $0 == url }
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .foregroundStyle(.secondary)
+                            }
+                            .buttonStyle(.plain)
+                            .help("Remove")
+                        }
                     }
                 }
             }
@@ -188,40 +236,65 @@ struct FileJobView<Controls: View>: View {
                 start()
             }
             if running {
-                ProgressView(value: progress)
+                VStack(alignment: .leading, spacing: 6) {
+                    ProgressView(value: progress) {
+                        Text("Working…")
+                            .font(.callout)
+                    }
                     .progressViewStyle(.linear)
+                    Button("Cancel") { stop() }
+                        .buttonStyle(.borderless)
+                }
             }
             if let errorText {
-                Text(errorText)
-                    .font(.system(size: 13))
+                Label(errorText, systemImage: "exclamationmark.triangle.fill")
+                    .font(.callout)
                     .foregroundStyle(.red)
                     .fixedSize(horizontal: false, vertical: true)
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.red.opacity(0.08)))
             }
             if !outputs.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Saved next to the original")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                    ForEach(outputs, id: \.path) { url in
-                        HStack {
-                            Text(url.lastPathComponent)
-                                .font(.system(size: 13))
-                                .lineLimit(1)
-                            Spacer()
-                            Button("Reveal in Finder") {
-                                Outputs.reveal(url)
-                            }
-                        }
-                    }
-                }
+                ResultTray(urls: outputs, heading: "Saved next to the original")
+            } else if sampleResult {
+                ResultTray(urls: [URL(fileURLWithPath: "/tmp/Result.pdf")], heading: "Ready")
             }
         }
         .onAppear {
+            adoptIncoming()
             guard DemoSession.enabled, DemoSession.take(tool), urls.isEmpty,
                   let files = DemoSession.files[tool], !files.isEmpty else { return }
             urls = files
             start()
         }
+        .onChange(of: model.incomingFiles) { _, _ in
+            adoptIncoming()
+        }
+        .onChange(of: model.cancelTick) { _, _ in
+            if running { stop() }
+        }
+        .onChange(of: running) { _, value in
+            if model.openTool == tool { model.toolRunning = value }
+        }
+        .onDisappear {
+            if model.openTool == tool { model.toolRunning = false }
+        }
+    }
+
+    private func adoptIncoming() {
+        guard model.openTool == tool, !model.incomingFiles.isEmpty else { return }
+        urls = model.incomingFiles
+        outputs = []
+        errorText = nil
+        model.incomingFiles = []
+        onFiles(urls)
+    }
+
+    private func stop() {
+        task?.cancel()
+        running = false
+        model.toolRunning = false
     }
 
     private func start() {
@@ -230,7 +303,7 @@ struct FileJobView<Controls: View>: View {
         progress = 0
         errorText = nil
         outputs = []
-        Task {
+        task = Task {
             do {
                 let made = try await RunLog.measure(tool: tool, inputs: current.count) {
                     try await perform(current) { value in
@@ -248,6 +321,52 @@ struct FileJobView<Controls: View>: View {
             }
             running = false
             progress = 1
+        }
+    }
+}
+
+struct ResultTray: View {
+    var urls: [URL]
+    var heading = "Ready"
+
+    var body: some View {
+        if !urls.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(heading)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                ForEach(urls, id: \.path) { url in
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "doc")
+                                .foregroundStyle(Palette.accent)
+                            Text(url.lastPathComponent)
+                                .font(.body)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            Spacer(minLength: 0)
+                        }
+                        HStack(spacing: 12) {
+                            Button("Reveal") { Outputs.reveal(url) }
+                            Button("Open") { NSWorkspace.shared.open(url) }
+                            Button("Copy") {
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.writeObjects([url as NSURL])
+                            }
+                        }
+                        .font(.callout)
+                        .buttonStyle(.borderless)
+                    }
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.primary.opacity(0.04)))
+                    .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .onDrag {
+                        NSItemProvider(contentsOf: url) ?? NSItemProvider(object: url.path as NSString)
+                    }
+                    .help("Drag the file to the Desktop or another app")
+                }
+            }
         }
     }
 }

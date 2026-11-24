@@ -27,6 +27,7 @@ struct MacToolScreen: View {
         case .resetPermissions: PermissionTool()
         case .hiddenSettings: HiddenSettingsTool()
         case .mouseFixes: MouseTool()
+        case .displayControl: DisplayControlTool()
         default:
             if let tool = ToolRegistry.byID[id] { ComingSoonView(tool: tool) }
         }

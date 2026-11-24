@@ -14,6 +14,10 @@ final class AppModel: ObservableObject {
     @Published var selection: ToolID?
     @Published var searchFocusTick = 0
     @Published var searchFieldFocused = false
+    @Published var toolRunning = false
+    @Published var cancelTick = 0
+    @Published var incomingFiles: [URL] = []
+    var runClaim: String?
 
     private let defaults: UserDefaults
     private let persists: Bool
@@ -51,7 +55,16 @@ final class AppModel: ObservableObject {
     var visibleTools: [ToolDefinition] {
         if isSearching { return searchResults }
         if let category { return ToolRegistry.tools(in: category) }
-        return []
+        let plan = homePlan
+        var ids = plan.recentIDs + plan.spotlight
+        for card in plan.categoryCards {
+            ids.append(contentsOf: ToolRegistry.tools(in: card.category).prefix(4).map(\.id))
+        }
+        var seen = Set<ToolID>()
+        return ids.compactMap { id in
+            guard seen.insert(id).inserted else { return nil }
+            return ToolRegistry.byID[id]
+        }
     }
 
     func selectTab(_ category: ToolCategory?) {
@@ -79,6 +92,12 @@ final class AppModel: ObservableObject {
 
     func closeTool() {
         openTool = nil
+        toolRunning = false
+        runClaim = nil
+    }
+
+    func requestCancel() {
+        cancelTick += 1
     }
 
     func toggleFavorite(_ id: ToolID) {

@@ -35,7 +35,6 @@ enum SelfTest {
     static func run(directory: String) async -> Int {
         let root = URL(fileURLWithPath: directory, isDirectory: true)
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        var lines: [String] = []
         do {
             _ = try await FixtureSet.make(in: root.appendingPathComponent("fixtures", isDirectory: true))
         } catch {
@@ -45,6 +44,16 @@ enum SelfTest {
             return 1
         }
         var failed = 0
+        let tabLine: String
+        do {
+            try TabHitTest.clickEdgeSelectsVideo()
+            tabLine = "SELFTEST tab-hit PASS"
+        } catch {
+            tabLine = "SELFTEST tab-hit FAIL \(error.localizedDescription.replacingOccurrences(of: "\n", with: " "))"
+            failed += 1
+        }
+        emit(tabLine)
+        var lines: [String] = [tabLine]
         for tool in ToolRegistry.all {
             let line: String
             if tool.status != .working {
@@ -106,7 +115,7 @@ enum SelfTest {
                 once.run { continuation.resume(returning: -2) }
                 return
             }
-            DispatchQueue.global().asyncAfter(deadline: .now() + 90) {
+            DispatchQueue.global().asyncAfter(deadline: .now() + 140) {
                 if process.isRunning {
                     process.terminate()
                     kill(process.processIdentifier, SIGKILL)
@@ -209,7 +218,14 @@ enum SelfTest {
         case .extractAudio:
             _ = try await check(MediaJobs.extractAudio(urls: [fixtures.video], progress: { _ in }))
         case .convertAudio:
-            _ = try await check(MediaJobs.convertAudio(urls: [fixtures.audio], ext: "wav", progress: { _ in }))
+            for ext in ["m4a", "wav", "aiff", "caf"] {
+                let made = try await check(MediaJobs.convertAudio(urls: [fixtures.audio], ext: ext, progress: { _ in }))
+                let file = try AVAudioFile(forReading: made[0])
+                if file.length < 1000 { throw ToolError(message: "\(ext) was too short") }
+                if made[0].pathExtension.lowercased() != ext {
+                    throw ToolError(message: "expected a .\(ext) file")
+                }
+            }
         case .beautifyScreenshot:
             _ = try checkOne(ImageJobs.beautify(url: fixtures.png, padding: 12, radius: 8, shadow: true, aspect: CGSize(width: 16, height: 9), background: .white))
         case .convertImages:
@@ -330,9 +346,93 @@ enum SelfTest {
         case .pdfToImages:
             _ = try check(PDFJobs.pdfToImages(url: fixtures.pdf, ext: "png", progress: { _ in }))
         case .wordToPDF:
-            _ = try checkOne(try await PDFJobs.wordToPDF(url: fixtures.notes))
+            let printed = try checkOne(try await PDFJobs.wordToPDF(url: fixtures.notes))
+            try requirePDFText(printed, contains: "Hello")
         case .markdownToPDF:
-            _ = try checkOne(try await PDFJobs.markdown("# Hello\n\nA note.", nextTo: fixtures.notes))
+            let notes = try checkOne(try await PDFJobs.markdown("# Hello\n\nA note about Satchel.", nextTo: fixtures.notes))
+            try requirePDFText(notes, contains: "Hello")
+        case .downloadVideo:
+            try await downloadCheck(fixtures)
+        case .burnSubtitles:
+            let srt = fixtures.folder.appendingPathComponent("cues.srt")
+            try """
+            1
+            00:00:00,200 --> 00:00:02,600
+            HELLO
+
+            """.write(to: srt, atomically: true, encoding: .utf8)
+            let burned = try await SubtitleBurn.burn(video: fixtures.video, srt: srt, progress: { _ in })
+            _ = try checkOne(burned)
+            let generator = AVAssetImageGenerator(asset: AVURLAsset(url: burned))
+            generator.appliesPreferredTrackTransform = true
+            generator.requestedTimeToleranceBefore = .zero
+            generator.requestedTimeToleranceAfter = .zero
+            let sample = try await generator.image(at: CMTime(seconds: 1.0, preferredTimescale: 600)).image
+            let recognized = (try? OCRJobs.text(from: sample)) ?? ""
+            if !recognized.uppercased().contains("HELLO") {
+                throw ToolError(message: "burned frame text was \(recognized)")
+            }
+        case .cleanAudio:
+            try AudioCleanup.assertLouderSignal()
+            let noisy = fixtures.folder.appendingPathComponent("noisy.wav")
+            try AudioCleanup.writeTestTone(to: noisy)
+            _ = try await check(AudioCleanup.clean(urls: [noisy], progress: { _ in }))
+        case .pdfToWord:
+            let docx = try OfficeDocs.pdfToWord(url: fixtures.pdf)
+            let extracted = try DocxPackage.plainText(docx)
+            if !extracted.localizedCaseInsensitiveContains("Hello") || !extracted.localizedCaseInsensitiveContains("secret") {
+                throw ToolError(message: "docx missed the PDF text: \(extracted)")
+            }
+        case .convertDocuments:
+            let rtf = try OfficeDocs.convert(url: fixtures.notes, ext: "rtf")
+            let rtfText = try String(contentsOf: rtf, encoding: .utf8)
+            if !rtfText.hasPrefix("{\\rtf") || !rtfText.contains("Hello") {
+                throw ToolError(message: "rtf conversion failed")
+            }
+            let html = try OfficeDocs.convert(url: fixtures.notes, ext: "html")
+            let htmlText = try String(contentsOf: html, encoding: .utf8)
+            if !htmlText.localizedCaseInsensitiveContains("Hello") {
+                throw ToolError(message: "html conversion missed the text")
+            }
+        case .powerpointToPDF:
+            let deck = fixtures.folder.appendingPathComponent("deck.pptx")
+            try OfficeDocs.makeSlides(lines: ["Roadmap"], to: deck)
+            let slides = try await OfficeDocs.powerpoint(url: deck, progress: { _ in })
+            try requirePDFText(slides, contains: "Roadmap")
+        case .excelToPDF:
+            let book = fixtures.folder.appendingPathComponent("sheet.xlsx")
+            try OfficeDocs.makeWorkbook(cells: [["Revenue", "42"]], to: book)
+            let table = try await OfficeDocs.excel(url: book, progress: { _ in })
+            try requirePDFText(table, contains: "Revenue")
+            try requirePDFText(table, contains: "42")
+        case .summarize:
+            let note = Array(repeating: "Cats sleep in warm sun.", count: 4).joined(separator: " ")
+                + " " + Array(repeating: "Trains cross the valley at dusk.", count: 4).joined(separator: " ")
+            let summary = Summaries.extractive(note)
+            if summary.count >= note.count { throw ToolError(message: "summary was not shorter") }
+            if !summary.localizedCaseInsensitiveContains("cats") && !summary.localizedCaseInsensitiveContains("trains") {
+                throw ToolError(message: "summary missed the topic")
+            }
+            let generated = await Summaries.make(note)
+            if generated.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                throw ToolError(message: "summary was empty")
+            }
+        case .askDocument:
+            let document = "The secret color is indigo. The sky is wide and the road is long."
+            let passage = DocumentQA.bestPassage(question: "What is the secret color?", document: document)
+            if !passage.localizedCaseInsensitiveContains("indigo") {
+                throw ToolError(message: "passage missed indigo: \(passage)")
+            }
+            let answer = await DocumentQA.answer(question: "What is the secret color?", document: document)
+            if answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                throw ToolError(message: "answer was empty")
+            }
+        case .displayControl:
+            let reading = try DisplayDesk.read()
+            guard let mode = reading.modes.first(where: { $0.current }) ?? reading.modes.first,
+                  mode.width > 0, mode.height > 0 else {
+                throw ToolError(message: "display mode was empty")
+            }
         case .extractText, .captureText:
             _ = try OCRJobs.text(from: ImageFiles.load(fixtures.labeled))
         case .wordCounter:
@@ -495,6 +595,36 @@ enum SelfTest {
     private static func checkOne(_ url: URL) throws -> URL {
         _ = try check([url])
         return url
+    }
+
+    private static func downloadCheck(_ fixtures: FixtureSet) async throws {
+        let clip = try Data(contentsOf: fixtures.video)
+        let playlist = """
+        #EXTM3U
+        #EXT-X-VERSION:3
+        #EXT-X-TARGETDURATION:4
+        #EXTINF:3.0,
+        clip.mov
+        #EXT-X-ENDLIST
+        """
+        let (port, stop) = try LoopbackServer.start([
+            "clip.mov": clip,
+            "index.m3u8": Data(playlist.utf8)
+        ])
+        defer { stop() }
+        try await Task.sleep(nanoseconds: 150_000_000)
+        let folder = fixtures.folder.appendingPathComponent("downloads", isDirectory: true)
+        let direct = try await VideoDownload.save(urlString: "http://127.0.0.1:\(port)/clip.mov", directory: folder, allowPageTool: false, progress: { _ in })
+        if try Data(contentsOf: direct) != clip { throw ToolError(message: "direct download did not match") }
+        let hlsFolder = fixtures.folder.appendingPathComponent("hls", isDirectory: true)
+        let streamed = try await VideoDownload.save(urlString: "http://127.0.0.1:\(port)/index.m3u8", directory: hlsFolder, allowPageTool: false, progress: { _ in })
+        if try Data(contentsOf: streamed) != clip { throw ToolError(message: "hls download did not match the segment") }
+    }
+
+    private static func requirePDFText(_ url: URL, contains needle: String) throws {
+        guard let document = PDFDocument(url: url), let text = document.string, text.localizedCaseInsensitiveContains(needle) else {
+            throw ToolError(message: "PDF did not contain \(needle)")
+        }
     }
 }
 

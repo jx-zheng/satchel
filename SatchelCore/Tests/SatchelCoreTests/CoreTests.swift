@@ -40,11 +40,7 @@ final class CatalogTests: XCTestCase {
 
     func testPlaceholderSet() {
         let placeholders = Set(ToolRegistry.all.filter { $0.status == .placeholder }.map(\.id))
-        XCTAssertEqual(placeholders, [
-            .downloadVideo, .burnSubtitles, .cleanAudio, .summarize, .askDocument,
-            .pdfToWord, .convertDocuments, .powerpointToPDF, .excelToPDF, .displayControl,
-            .convertAudio, .wordToPDF, .markdownToPDF
-        ])
+        XCTAssertEqual(placeholders, [])
     }
 }
 
