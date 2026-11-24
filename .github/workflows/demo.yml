@@ -7,6 +7,9 @@ on:
         description: Draft smoke only. Not the deliverable.
         type: boolean
         default: true
+  push:
+    branches:
+      - cursor/satchel-selftest-perf-demo-17b5
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -15,6 +18,7 @@ concurrency:
 jobs:
   record:
     runs-on: macos-15
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - name: Install XcodeGen
@@ -38,10 +42,11 @@ jobs:
           test -n "$APP"
           codesign --force --deep --sign - "$APP" || true
           mkdir -p "$RUNNER_TEMP/demo"
+          EVENT="${{ github.event_name }}"
           SMOKE="${{ github.event.inputs.smoke }}"
           EXTRA=()
           LIMIT=180
-          if [ "$SMOKE" != "false" ]; then
+          if [ "$EVENT" = "workflow_dispatch" ] && [ "$SMOKE" != "false" ]; then
             EXTRA+=(--demo-smoke)
             LIMIT=60
             printf 'draft smoke, not the deliverable\n' > "$RUNNER_TEMP/demo/demo-draft.txt"
@@ -76,6 +81,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ github.event.inputs.smoke == 'false' && 'satchel-demo' || 'satchel-demo-draft' }}
+          name: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.smoke != 'false') && 'satchel-demo-draft' || 'satchel-demo' }}
           path: ${{ runner.temp }}/demo
           if-no-files-found: error

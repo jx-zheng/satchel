@@ -82,6 +82,8 @@ enum Snapshotter {
             }
             for id in ToolID.allCases {
                 guard let tool = ToolRegistry.byID[id] else { continue }
+                model.openTool = id
+                model.category = tool.category
                 let toolView = ToolRouter(tool: tool)
                     .environmentObject(model)
                     .environment(\.colorScheme, scheme)
