@@ -597,7 +597,7 @@ enum LoopbackServer {
             close(fd)
             throw ToolError(message: "Could not read the local port.")
         }
-        let port = ntohs(stored.sin_port)
+        let port = UInt16(bigEndian: stored.sin_port)
         let token = Token()
         Thread.detachNewThread {
             serve(fd: fd, token: token, files: files)
@@ -672,7 +672,7 @@ enum DisplayDesk {
         var lines: [DisplayModeLine] = []
         for id in ids.prefix(Int(count)) {
             let current = CGDisplayCopyDisplayMode(id)
-            let modes = CGDisplayCopyAllDisplayModes(id, nil) ?? []
+            let modes = Self.modes(on: id)
             let listed = modes.isEmpty ? (current.map { [$0] } ?? []) : modes
             for mode in listed {
                 let width = Int(mode.width)
@@ -694,6 +694,14 @@ enum DisplayDesk {
         let clamped = max(0, min(1, value))
         guard BrightnessLink.write(service, clamped) else {
             throw ToolError(message: "Brightness could not be changed.")
+        }
+    }
+
+    private static func modes(on id: CGDirectDisplayID) -> [CGDisplayMode] {
+        guard let array = CGDisplayCopyAllDisplayModes(id, nil) else { return [] }
+        return (0..<CFArrayGetCount(array)).compactMap { index in
+            guard let pointer = CFArrayGetValueAtIndex(array, index) else { return nil }
+            return Unmanaged<CGDisplayMode>.fromOpaque(pointer).takeUnretainedValue()
         }
     }
 

@@ -24,6 +24,7 @@ jobs:
         run: cp ci/BeforeSnapshot.swift /tmp/BeforeSnapshot.swift
       - name: Restore the main sources
         run: |
+          git fetch --depth=1 origin b154b93f62fd0f8efd5d1aa5ddf0bffeb1c9f773
           rm -rf Satchel SatchelCore
           git checkout b154b93f62fd0f8efd5d1aa5ddf0bffeb1c9f773 -- Satchel SatchelCore project.yml
           cp /tmp/BeforeSnapshot.swift Satchel/Snapshot.swift
@@ -51,7 +52,7 @@ jobs:
           "$APP/Contents/MacOS/Satchel" --snapshot "$RUNNER_TEMP/before"
           find "$RUNNER_TEMP/before" -name 'before-*.png' | sort
       - name: Upload before snapshots
-        if: always()
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: satchel-redesign-before

@@ -2,6 +2,7 @@ import AppKit
 import CoreGraphics
 import Foundation
 import ScreenCaptureKit
+import SwiftUI
 import Translation
 
 struct SkipSignal: Error {

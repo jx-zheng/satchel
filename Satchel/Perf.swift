@@ -3,6 +3,7 @@ import AVFoundation
 import CoreMedia
 import CoreVideo
 import Foundation
+import SatchelCore
 import SwiftUI
 
 struct PerfDriver: View {
