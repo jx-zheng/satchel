@@ -75,6 +75,13 @@ jobs:
           # The design snapshot calls exit() and macOS may still be showing that dialog.
           killall "Problem Reporter" >/dev/null 2>&1 || true
           killall UserNotificationCenter >/dev/null 2>&1 || true
+          (
+            for _ in $(seq 1 50); do
+              killall "Problem Reporter" >/dev/null 2>&1 || true
+              sleep 2
+            done
+          ) &
+          sweeper=$!
           # Record before any later step calls exit(), which leaves a crash dialog up.
           screencapture -v -V 100 "$RUNNER_TEMP/demo/raw.mov" &
           cap=$!
@@ -90,6 +97,7 @@ jobs:
             sleep 1
           done
           wait "$cap" || true
+          kill "$sweeper" >/dev/null 2>&1 || true
           avconvert --source "$RUNNER_TEMP/demo/raw.mov" --preset Preset1280x720 --output "$RUNNER_TEMP/demo/satchel-demo.mp4"
           find "$RUNNER_TEMP/demo" -maxdepth 1 -type f -exec ls -lh {} \;
           test -s "$RUNNER_TEMP/demo/satchel-demo.mp4"
