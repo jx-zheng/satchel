@@ -5,7 +5,9 @@ import SwiftUI
 enum SatchelMain {
     static func main() {
         Launch.noteBoot()
-        if CommandLine.arguments.contains("--tab-hit") {
+        if CommandLine.arguments.contains("--cold-window") {
+            ColdWindow.run()
+        } else if CommandLine.arguments.contains("--tab-hit") {
             Task { @MainActor in
                 let ok = (try? TabHitTest.clickEdgeSelectsVideo()) != nil
                 exit(ok ? 0 : 1)

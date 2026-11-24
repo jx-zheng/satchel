@@ -49,6 +49,7 @@ enum SelfTest {
         if tabLine.contains(" FAIL ") { failed += 1 }
         emit(tabLine)
         var lines: [String] = [tabLine]
+        var times: [[String: Any]] = []
         for tool in ToolRegistry.all {
             let line: String
             if tool.status != .working {
@@ -57,6 +58,10 @@ enum SelfTest {
                 line = report(tool.id, "SKIP", reason)
             } else {
                 line = await runChild(tool, directory: directory)
+                if let seconds = readSeconds(root), line.contains(" PASS") || line.contains(" FAIL") {
+                    let outcome = line.contains(" FAIL") ? "FAIL" : "PASS"
+                    times.append(["tool": tool.id.rawValue, "seconds": seconds, "outcome": outcome])
+                }
             }
             emit(line)
             lines.append(line)
@@ -64,7 +69,17 @@ enum SelfTest {
             let summary = lines.joined(separator: "\n") + "\n"
             try? summary.write(to: root.appendingPathComponent("selftest.txt"), atomically: true, encoding: .utf8)
         }
+        if let data = try? JSONSerialization.data(withJSONObject: times, options: [.prettyPrinted, .sortedKeys]) {
+            try? data.write(to: root.appendingPathComponent("tool-times.json"))
+        }
         return failed == 0 ? 0 : 1
+    }
+
+    private static func readSeconds(_ root: URL) -> Double? {
+        let url = root.appendingPathComponent("seconds.txt")
+        defer { try? FileManager.default.removeItem(at: url) }
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+        return Double(text.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
     @MainActor
@@ -76,7 +91,10 @@ enum SelfTest {
             try? line.write(to: root.appendingPathComponent("result.txt"), atomically: true, encoding: .utf8)
             return 1
         }
+        let started = Date()
         let line = await evaluate(tool, fixtures: fixtures)
+        let seconds = String(format: "%.6f\n", Date().timeIntervalSince(started))
+        try? seconds.write(to: root.appendingPathComponent("seconds.txt"), atomically: true, encoding: .utf8)
         try? line.write(to: root.appendingPathComponent("result.txt"), atomically: true, encoding: .utf8)
         return line.contains(" FAIL ") ? 1 : 0
     }

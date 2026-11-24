@@ -8,7 +8,7 @@ struct HomeView: View {
     var body: some View {
         let plan = model.homePlan
         ScrollView {
-            VStack(alignment: .leading, spacing: 28) {
+            LazyVStack(alignment: .leading, spacing: 28) {
                 hero
                 if !model.incomingFiles.isEmpty {
                     incomingNote

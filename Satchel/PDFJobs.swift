@@ -152,22 +152,24 @@ enum PDFJobs {
         let count = max(1, document.pageCount)
         let pixelCap: CGFloat = clamped < 0.5 ? 1100 : (clamped < 0.7 ? 1500 : 1900)
         for index in 0..<document.pageCount {
-            guard let page = document.page(at: index) else { continue }
-            let bounds = page.bounds(for: .mediaBox)
-            let longSide = max(bounds.width, bounds.height)
-            let scale = min(1, pixelCap / max(longSide, 1))
-            context.beginPDFPage(Self.pageInfo(bounds))
-            context.setFillColor(NSColor.white.cgColor)
-            context.fill(bounds)
-            if let image = render(page, scale: scale),
-               let jpeg = jpegData(image, quality: clamped),
-               let source = CGImageSourceCreateWithData(jpeg as CFData, nil),
-               let compressed = CGImageSourceCreateImageAtIndex(source, 0, nil) {
-                context.draw(compressed, in: bounds)
-            } else {
-                page.draw(with: .mediaBox, to: context)
+            autoreleasepool {
+                guard let page = document.page(at: index) else { return }
+                let bounds = page.bounds(for: .mediaBox)
+                let longSide = max(bounds.width, bounds.height)
+                let scale = min(1, pixelCap / max(longSide, 1))
+                context.beginPDFPage(Self.pageInfo(bounds))
+                context.setFillColor(NSColor.white.cgColor)
+                context.fill(bounds)
+                if let image = render(page, scale: scale),
+                   let jpeg = jpegData(image, quality: clamped),
+                   let source = CGImageSourceCreateWithData(jpeg as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),
+                   let compressed = CGImageSourceCreateImageAtIndex(source, 0, [kCGImageSourceShouldCache: false] as CFDictionary) {
+                    context.draw(compressed, in: bounds)
+                } else {
+                    page.draw(with: .mediaBox, to: context)
+                }
+                context.endPDFPage()
             }
-            context.endPDFPage()
             progress(Double(index + 1) / Double(count))
         }
         context.closePDF()

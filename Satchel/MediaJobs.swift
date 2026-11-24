@@ -1011,6 +1011,8 @@ enum ImageFiles {
             throw ToolError(message: "Could not open \(url.lastPathComponent).")
         }
         let options: [CFString: Any] = [
+            kCGImageSourceShouldCache: false,
+            kCGImageSourceShouldCacheImmediately: false,
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,
             kCGImageSourceThumbnailMaxPixelSize: maxPixel

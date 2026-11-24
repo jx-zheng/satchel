@@ -34,7 +34,7 @@ struct CategoryGrid: View {
     }
 
     private func grouped(_ tools: [ToolDefinition]) -> some View {
-        VStack(spacing: 0) {
+        LazyVStack(spacing: 0) {
             ForEach(Array(tools.enumerated()), id: \.element.id) { index, tool in
                 ToolRow(tool: tool, selected: model.selection == tool.id)
                 if index < tools.count - 1 {
@@ -71,7 +71,7 @@ struct ResultGrid: View {
                     }
                     .padding(.vertical, 12)
                 } else {
-                    VStack(spacing: 0) {
+                    LazyVStack(spacing: 0) {
                         ForEach(Array(tools.enumerated()), id: \.element.id) { index, tool in
                             ToolRow(tool: tool, selected: model.selection == tool.id)
                             if index < tools.count - 1 {

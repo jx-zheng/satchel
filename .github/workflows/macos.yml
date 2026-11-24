@@ -72,23 +72,34 @@ jobs:
           test -n "$APP"
           codesign --force --deep --sign - "$APP" || true
           mkdir -p "$RUNNER_TEMP/demo"
-          # The design snapshot calls exit() and macOS may still be showing that dialog.
+          rm -f "$RUNNER_TEMP/demo/ready" "$RUNNER_TEMP/demo/demo-span.txt"
+          # Hide the Dock and the desktop icons, then ask for a 1080p display when the tool exists.
+          defaults write com.apple.dock autohide -bool true
+          defaults write com.apple.dock autohide-delay -float 0
+          killall Dock >/dev/null 2>&1 || true
+          defaults write com.apple.finder CreateDesktop -bool false
+          killall Finder >/dev/null 2>&1 || true
+          if command -v displayplacer >/dev/null 2>&1; then
+            displayplacer "res:1920x1080" || true
+          fi
           killall "Problem Reporter" >/dev/null 2>&1 || true
-          killall UserNotificationCenter >/dev/null 2>&1 || true
           (
-            for _ in $(seq 1 50); do
+            for _ in $(seq 1 60); do
               killall "Problem Reporter" >/dev/null 2>&1 || true
               sleep 2
             done
           ) &
           sweeper=$!
-          # Record before any later step calls exit(), which leaves a crash dialog up.
-          screencapture -v -V 100 "$RUNNER_TEMP/demo/raw.mov" &
-          cap=$!
-          sleep 1
           open "$APP" --args --demo "$RUNNER_TEMP/demo" --demo-norecord
+          for _ in $(seq 1 90); do
+            [ -f "$RUNNER_TEMP/demo/ready" ] && break
+            sleep 1
+          done
+          # Start once the tour is ready, and stop when Satchel quits, so the file has no idle tail.
+          screencapture -v -V 120 "$RUNNER_TEMP/demo/raw.mov" &
+          cap=$!
           seen=0
-          for _ in $(seq 1 100); do
+          for _ in $(seq 1 150); do
             if pgrep -x Satchel >/dev/null; then
               seen=1
             elif [ "$seen" = "1" ]; then
@@ -96,6 +107,8 @@ jobs:
             fi
             sleep 1
           done
+          sleep 1
+          kill -INT "$cap" >/dev/null 2>&1 || true
           wait "$cap" || true
           kill "$sweeper" >/dev/null 2>&1 || true
           avconvert --source "$RUNNER_TEMP/demo/raw.mov" --preset Preset1280x720 --output "$RUNNER_TEMP/demo/satchel-demo.mp4"
@@ -104,6 +117,12 @@ jobs:
           bytes=$(stat -f%z "$RUNNER_TEMP/demo/satchel-demo.mp4")
           echo "demo bytes=$bytes"
           test "$bytes" -ge 1000000
+          python3 - <<'PY'
+import os
+span = float(open(os.environ["RUNNER_TEMP"] + "/demo/demo-span.txt").read())
+print("demo span", span)
+assert 55 <= span <= 95, span
+PY
       - name: Snapshot
         timeout-minutes: 25
         run: |
@@ -132,7 +151,7 @@ jobs:
           echo "selftest=$code" >> "$GITHUB_OUTPUT"
       - name: Performance
         if: always()
-        timeout-minutes: 15
+        timeout-minutes: 25
         run: |
           set -euo pipefail
           APP="$(find "$RUNNER_TEMP/dd/Build/Products/Release" -name 'Satchel.app' -type d | head -1)"
@@ -153,6 +172,33 @@ jobs:
           if [ -f "$RUNNER_TEMP/snap/perf.json" ]; then
             cat "$RUNNER_TEMP/snap/perf.json"
           fi
+          python3 - <<'PY'
+import json, os
+path = os.environ["RUNNER_TEMP"] + "/snap/perf.json"
+report = json.load(open(path))
+mib = 1024 * 1024
+first = float(report["firstLaunchSeconds"])
+median = float(report["coldLaunchMedianSeconds"])
+samples = report["launchSamples"]
+print("launch first", first, "median", median, "samples", samples)
+assert len(samples) == 6, samples
+assert first > 0.05 and median > 0.05, (first, median)
+assert all(sample > 0.05 for sample in samples), samples
+final = int(report["finalRSS"])
+base = int(report["afterTabsRSS"])
+gap = float(report["maxMainThreadGapSeconds"])
+print("rss final", round(final / mib, 1), "after tabs", round(base / mib, 1), "gap", gap)
+assert final < 200 * mib, final
+assert final <= base + 30 * mib, (final, base)
+assert gap < 0.1, gap
+tools = report["tools"]
+slowest = report["slowest"]
+assert len(tools) >= 90, len(tools)
+assert len(slowest) == 10, slowest
+print("slowest")
+for row in slowest:
+    print(f"{row['seconds']:.3f} {row['tool']}")
+PY
       - name: Upload snapshots
         if: always()
         uses: actions/upload-artifact@v4

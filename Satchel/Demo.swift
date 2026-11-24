@@ -25,21 +25,22 @@ struct DemoRoot: View {
     var body: some View {
         RootView()
             .environmentObject(model)
-            .frame(width: 1280, height: 840)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .task {
                 await DemoScript.run(directory: directory, record: record, model: model)
                 NSApp.terminate(nil)
             }
-            .onAppear { center() }
+            .onAppear { fit() }
     }
 
-    private func center() {
+    private func fit() {
         DispatchQueue.main.async {
             NSApp.setActivationPolicy(.regular)
             NSApp.activate()
-            for window in NSApp.windows where window.isVisible || window.contentView != nil {
-                window.setContentSize(NSSize(width: 1280, height: 840))
-                window.center()
+            let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+            let frame = screen.insetBy(dx: 12, dy: 12)
+            for window in NSApp.windows where window.contentView != nil {
+                window.setFrame(frame, display: true)
                 window.makeKeyAndOrderFront(nil)
             }
         }
@@ -93,31 +94,42 @@ enum DemoScript {
             }
             return
         }
-        await pause(0.4)
-        for category in ToolCategory.allCases {
-            model.selectTab(category)
-            await pause(0.7)
-        }
+        let tourStart = Date()
+        try? "ready".write(to: folder.appendingPathComponent("ready"), atomically: true, encoding: .utf8)
+        fitWindow()
+        await pause(2.0)
+        model.selectTab(.video)
+        await pause(1.4)
+        model.selectTab(.audio)
+        await pause(1.2)
+        model.selectTab(.images)
+        await pause(1.2)
+        model.selectTab(.docs)
+        await pause(1.2)
         model.selectTab(nil)
-        await pause(0.4)
+        await pause(0.6)
         for character in "pdf" {
             model.query.append(character)
-            await pause(0.25)
+            await pause(0.18)
         }
         await pause(1.0)
         model.query = ""
-        await pause(0.3)
-        await open(.compressVideo, model, seconds: 5)
-        await open(.burnSubtitles, model, seconds: 5)
-        await open(.convertAudio, model, seconds: 4)
-        await open(.mergePDFs, model, seconds: 4)
-        await open(.markdownToPDF, model, seconds: 4)
-        await open(.summarize, model, seconds: 4)
-        await open(.extractText, model, seconds: 4)
-        await open(.batchRename, model, seconds: 4)
+        await pause(0.4)
+        await open(.compressVideo, model, seconds: 7.8)
+        await open(.burnSubtitles, model, seconds: 7.8)
+        await open(.convertAudio, model, seconds: 6.8)
+        await open(.mergePDFs, model, seconds: 6.8)
+        useDark()
+        await pause(1.0)
+        await open(.markdownToPDF, model, seconds: 6.8)
+        await open(.summarize, model, seconds: 6.8)
+        await open(.extractText, model, seconds: 6.8)
+        await open(.batchRename, model, seconds: 6.8)
         model.closeTool()
         model.selectTab(nil)
-        await pause(1.0)
+        await pause(1.4)
+        let span = String(format: "%.2f\n", Date().timeIntervalSince(tourStart))
+        try? span.write(to: folder.appendingPathComponent("demo-span.txt"), atomically: true, encoding: .utf8)
         if record, let movie = await recorder.stop() {
             do {
                 try await transcode(movie, to: folder.appendingPathComponent("satchel-demo.mp4"))
@@ -156,5 +168,22 @@ enum DemoScript {
 
     private static func pause(_ seconds: Double) async {
         try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+    }
+
+    private static func fitWindow() {
+        let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        let frame = screen.insetBy(dx: 12, dy: 12)
+        for window in NSApp.windows where window.contentView != nil {
+            window.setFrame(frame, display: true)
+            window.makeKeyAndOrderFront(nil)
+        }
+    }
+
+    private static func useDark() {
+        let appearance = NSAppearance(named: .darkAqua)
+        NSApp.appearance = appearance
+        for window in NSApp.windows {
+            window.appearance = appearance
+        }
     }
 }

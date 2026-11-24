@@ -39,7 +39,7 @@ struct RootView: View {
         .background(Color(nsColor: .windowBackgroundColor))
         .coordinateSpace(name: "satchel-root")
         .onPreferenceChange(TabFrameKey.self) { TabHitFrames.latest = $0 }
-        .frame(minWidth: snapshot ? 1440 : 1080, minHeight: snapshot ? 900 : 680)
+        .frame(minWidth: snapshot ? 1440 : 880, minHeight: snapshot ? 900 : 560)
         .onAppear {
             guard !snapshot else { return }
             installMonitor()

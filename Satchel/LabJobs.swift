@@ -174,11 +174,20 @@ enum ScreenGrab {
 
 enum PhotoPDF {
     static func write(to url: URL, pages: Int, width: Int = 1400, height: Int = 900) throws {
-        var images: [CGImage] = []
-        for index in 0..<pages {
-            images.append(try page(index: index, width: width, height: height))
+        let data = NSMutableData()
+        var box = CGRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(height))
+        guard let consumer = CGDataConsumer(data: data as CFMutableData),
+              let context = CGContext(consumer: consumer, mediaBox: &box, nil) else {
+            throw ToolError(message: "Could not write the photo PDF.")
         }
-        try PDFJobs.writeImages(images, to: url, pageBox: nil)
+        for index in 0..<pages {
+            let image = try autoreleasepool { try page(index: index, width: width, height: height) }
+            context.beginPDFPage(nil)
+            context.draw(image, in: box)
+            context.endPDFPage()
+        }
+        context.closePDF()
+        try (data as Data).write(to: url)
     }
 
     private static func page(index: Int, width: Int, height: Int) throws -> CGImage {
