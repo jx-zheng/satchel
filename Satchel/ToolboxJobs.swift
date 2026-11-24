@@ -50,89 +50,87 @@ enum SubtitleBurn {
         guard let sourceVideo = try await asset.loadTracks(withMediaType: .video).first else {
             throw ToolError(message: "That video has no picture track.")
         }
-        let duration = try await asset.load(.duration)
-        let composition = AVMutableComposition()
-        guard let videoTrack = composition.addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid) else {
-            throw ToolError(message: "Could not prepare the video.")
-        }
-        try videoTrack.insertTimeRange(CMTimeRange(start: .zero, duration: duration), of: sourceVideo, at: .zero)
-        if let sourceAudio = try await asset.loadTracks(withMediaType: .audio).first,
-           let audioTrack = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid) {
-            try? audioTrack.insertTimeRange(CMTimeRange(start: .zero, duration: duration), of: sourceAudio, at: .zero)
-        }
         let natural = try await sourceVideo.load(.naturalSize)
         let preferred = try await sourceVideo.load(.preferredTransform)
         let oriented = ClipGeometry.oriented(natural: natural, preferred: preferred)
         let size = ClipGeometry.even(oriented.size)
-        let instruction = AVMutableVideoCompositionInstruction()
-        instruction.timeRange = CMTimeRange(start: .zero, duration: duration)
-        let layerInstruction = AVMutableVideoCompositionLayerInstruction(assetTrack: videoTrack)
-        layerInstruction.setTransform(oriented.transform, at: .zero)
-        instruction.layerInstructions = [layerInstruction]
-        let videoComposition = AVMutableVideoComposition()
-        videoComposition.instructions = [instruction]
-        videoComposition.frameDuration = CMTime(value: 1, timescale: 30)
-        videoComposition.renderSize = size
-        videoComposition.renderScale = 1
-        videoComposition.animationTool = animationTool(cues: cues, size: size)
         let output = try Outputs.make(nextTo: video, suffix: "-subtitled", ext: "mp4")
-        guard let session = AVAssetExportSession(asset: composition, presetName: AVAssetExportPresetHighestQuality) else {
-            throw ToolError(message: "Could not export the subtitled video.")
-        }
         if FileManager.default.fileExists(atPath: output.path) {
             try FileManager.default.removeItem(at: output)
         }
-        session.outputURL = output
-        session.outputFileType = .mp4
-        session.videoComposition = videoComposition
+        let reader = try AVAssetReader(asset: asset)
+        let settings: [String: Any] = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
+        let trackOutput = AVAssetReaderTrackOutput(track: sourceVideo, outputSettings: settings)
+        trackOutput.alwaysCopiesSampleData = true
+        guard reader.canAdd(trackOutput) else { throw ToolError(message: "Could not read the video frames.") }
+        reader.add(trackOutput)
+        let writer = try AVAssetWriter(outputURL: output, fileType: .mp4)
+        let input = AVAssetWriterInput(mediaType: .video, outputSettings: [
+            AVVideoCodecKey: AVVideoCodecType.h264,
+            AVVideoWidthKey: Int(size.width),
+            AVVideoHeightKey: Int(size.height)
+        ])
+        input.expectsMediaDataInRealTime = false
+        guard writer.canAdd(input) else { throw ToolError(message: "Could not prepare the subtitled video.") }
+        writer.add(input)
+        guard writer.startWriting() else {
+            throw ToolError(message: writer.error?.localizedDescription ?? "Could not start the subtitled export.")
+        }
+        writer.startSession(atSourceTime: .zero)
+        guard reader.startReading() else {
+            throw ToolError(message: reader.error?.localizedDescription ?? "Could not read the video.")
+        }
         progress(0.05)
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            session.exportAsynchronously {
-                continuation.resume()
+        var frames = 0
+        while let sample = trackOutput.copyNextSampleBuffer() {
+            guard let image = CMSampleBufferGetImageBuffer(sample) else { continue }
+            let time = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sample))
+            if let cue = cues.first(where: { time >= $0.start && time <= $0.end }) {
+                stamp(cue.text, on: image)
             }
+            while !input.isReadyForMoreMediaData {
+                try await Task.sleep(nanoseconds: 5_000_000)
+            }
+            if !input.append(sample) {
+                throw ToolError(message: writer.error?.localizedDescription ?? "Could not write a subtitled frame.")
+            }
+            frames += 1
+        }
+        input.markAsFinished()
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            writer.finishWriting { continuation.resume() }
         }
         progress(1)
-        guard session.status == .completed else {
-            throw ToolError(message: session.error?.localizedDescription ?? "The subtitled export did not finish.")
+        guard frames > 0, writer.status == .completed else {
+            throw ToolError(message: writer.error?.localizedDescription ?? "The subtitled export did not finish.")
         }
         return output
     }
 
-    private static func animationTool(cues: [Cue], size: CGSize) -> AVVideoCompositionCoreAnimationTool {
-        let parent = CALayer()
-        let videoLayer = CALayer()
-        parent.frame = CGRect(origin: .zero, size: size)
-        videoLayer.frame = parent.frame
-        parent.beginTime = AVCoreAnimationBeginTimeAtZero
-        parent.addSublayer(videoLayer)
-        let fontSize = max(36, size.height * 0.22)
-        for cue in cues {
-            let text = CATextLayer()
-            let font = CTFontCreateWithName("Helvetica-Bold" as CFString, fontSize, nil)
-            text.string = cue.text
-            text.font = font
-            text.fontSize = fontSize
-            text.alignmentMode = .center
-            text.foregroundColor = CGColor(gray: 1, alpha: 1)
-            text.backgroundColor = CGColor(gray: 0, alpha: 1)
-            text.isWrapped = true
-            text.contentsScale = 2
-            text.isGeometryFlipped = true
-            text.shouldRasterize = true
-            text.rasterizationScale = 2
-            text.frame = CGRect(x: 0, y: size.height * 0.32, width: size.width, height: max(56, size.height * 0.36))
-            text.opacity = 0
-            let show = CABasicAnimation(keyPath: "opacity")
-            show.fromValue = 1
-            show.toValue = 1
-            show.beginTime = AVCoreAnimationBeginTimeAtZero + cue.start
-            show.duration = max(0.2, cue.end - cue.start)
-            show.fillMode = .forwards
-            show.isRemovedOnCompletion = false
-            text.add(show, forKey: "show")
-            parent.addSublayer(text)
-        }
-        return AVVideoCompositionCoreAnimationTool(postProcessingAsVideoLayer: videoLayer, in: parent)
+    private static func stamp(_ text: String, on buffer: CVPixelBuffer) {
+        CVPixelBufferLockBaseAddress(buffer, [])
+        defer { CVPixelBufferUnlockBaseAddress(buffer, []) }
+        guard let base = CVPixelBufferGetBaseAddress(buffer) else { return }
+        let width = CVPixelBufferGetWidth(buffer)
+        let height = CVPixelBufferGetHeight(buffer)
+        let row = CVPixelBufferGetBytesPerRow(buffer)
+        let info = CGBitmapInfo.byteOrder32Little.rawValue | CGImageAlphaInfo.premultipliedFirst.rawValue
+        guard let context = CGContext(
+            data: base, width: width, height: height, bitsPerComponent: 8, bytesPerRow: row,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: info
+        ) else { return }
+        let barHeight = max(48, CGFloat(height) * 0.30)
+        let bar = CGRect(x: 0, y: 12, width: CGFloat(width), height: barHeight)
+        context.setFillColor(CGColor(gray: 1, alpha: 1))
+        context.fill(bar)
+        let fontSize = max(28, CGFloat(height) * 0.16)
+        let font = CTFontCreateWithName("Helvetica-Bold" as CFString, fontSize, nil)
+        let line = CTLineCreateWithAttributedString(NSAttributedString(string: text, attributes: [
+            .font: font,
+            .foregroundColor: NSColor.black
+        ]))
+        context.textPosition = CGPoint(x: 12, y: bar.midY - fontSize * 0.35)
+        CTLineDraw(line, context)
     }
 
     private static func timestamp(_ raw: String) -> Double {

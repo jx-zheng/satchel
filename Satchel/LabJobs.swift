@@ -37,9 +37,9 @@ enum ColorSample {
             for x in stride(from: 0, to: pixels.width, by: 4) {
                 let offset = (y * pixels.width + x) * 4
                 let samples = [pixels.bytes[offset], pixels.bytes[offset + 1], pixels.bytes[offset + 2]]
-                if abs(Int(samples[0]) - Int(red)) < 24,
-                   abs(Int(samples[1]) - Int(green)) < 24,
-                   abs(Int(samples[2]) - Int(blue)) < 24 {
+                if abs(Int(samples[0]) - Int(red)) < 48,
+                   abs(Int(samples[1]) - Int(green)) < 48,
+                   abs(Int(samples[2]) - Int(blue)) < 48 {
                     return true
                 }
             }
