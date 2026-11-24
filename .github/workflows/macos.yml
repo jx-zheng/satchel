@@ -16,38 +16,25 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  before:
+  macos:
     runs-on: macos-15
-    timeout-minutes: 30
+    timeout-minutes: 70
     steps:
       - uses: actions/checkout@v4
-      - name: Keep the before snapshotter
-        run: cp ci/BeforeSnapshot.swift /tmp/BeforeSnapshot.swift
-      - name: Restore the main sources
-        run: |
-          git fetch --depth=1 origin b154b93f62fd0f8efd5d1aa5ddf0bffeb1c9f773
-          rm -rf Satchel SatchelCore
-          git checkout b154b93f62fd0f8efd5d1aa5ddf0bffeb1c9f773 -- Satchel SatchelCore project.yml
-          cp /tmp/BeforeSnapshot.swift Satchel/Snapshot.swift
       - name: Install XcodeGen
         run: brew install xcodegen
-      - name: Generate project
-        run: xcodegen generate
-      - name: Build
-        run: >
-          xcodebuild
-          -project Satchel.xcodeproj
-          -scheme Satchel
-          -configuration Release
-          -derivedDataPath "$RUNNER_TEMP/dd"
-          CODE_SIGNING_ALLOWED=NO
-          CODE_SIGNING_REQUIRED=NO
-          build
       - name: Snapshot the previous design
         timeout-minutes: 15
         run: |
           set -euo pipefail
-          APP="$(find "$RUNNER_TEMP/dd/Build/Products/Release" -name 'Satchel.app' -type d | head -1)"
+          cp ci/BeforeSnapshot.swift /tmp/BeforeSnapshot.swift
+          git fetch --depth=1 origin b154b93f62fd0f8efd5d1aa5ddf0bffeb1c9f773
+          rm -rf Satchel SatchelCore
+          git checkout b154b93f62fd0f8efd5d1aa5ddf0bffeb1c9f773 -- Satchel SatchelCore project.yml
+          cp /tmp/BeforeSnapshot.swift Satchel/Snapshot.swift
+          xcodegen generate
+          xcodebuild -project Satchel.xcodeproj -scheme Satchel -configuration Release -derivedDataPath "$RUNNER_TEMP/dd-before" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
+          APP="$(find "$RUNNER_TEMP/dd-before/Build/Products/Release" -name 'Satchel.app' -type d | head -1)"
           test -n "$APP"
           codesign --force --deep --sign - "$APP" || true
           mkdir -p "$RUNNER_TEMP/before"
@@ -60,15 +47,11 @@ jobs:
           name: satchel-redesign-before
           path: ${{ runner.temp }}/before
           if-no-files-found: error
-
-  build:
-    needs: before
-    runs-on: macos-15
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install XcodeGen
-        run: brew install xcodegen
+      - name: Restore this branch
+        run: |
+          set -euo pipefail
+          rm -rf Satchel SatchelCore Satchel.xcodeproj
+          git checkout HEAD -- Satchel SatchelCore project.yml
       - name: Generate project
         run: xcodegen generate
       - name: Build
@@ -159,8 +142,8 @@ jobs:
           fi
 
   redesign:
-    needs: [before, build]
-    if: always()
+    needs: macos
+    if: success()
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
