@@ -331,6 +331,19 @@ private struct RedactPDFTool: View {
             }
             Text(message).foregroundStyle(.secondary)
         }
+        .onAppear {
+            guard DemoSession.enabled, DemoSession.take(.redactPDF), let file = DemoSession.files[.redactPDF]?.first else { return }
+            url = file
+            word = "secret"
+            running = true
+            Task {
+                do {
+                    let made = try PDFJobs.redact(url: file, word: "secret", extra: [:]) { _ in }
+                    message = "Saved \(made.first?.lastPathComponent ?? "")"
+                } catch { message = error.localizedDescription }
+                running = false
+            }
+        }
     }
 }
 

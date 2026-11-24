@@ -138,7 +138,9 @@ enum PDFJobs {
     }
 
     static func compress(url: URL, quality: Double, progress: @escaping (Double) -> Void) throws -> [URL] {
+        let originalBytes = FileSize.bytes(url)
         let document = try open(url)
+        let clamped = min(0.82, max(0.35, quality))
         let data = NSMutableData()
         guard let consumer = CGDataConsumer(data: data as CFMutableData) else {
             throw ToolError(message: "Could not start a smaller PDF.")
@@ -147,14 +149,18 @@ enum PDFJobs {
         guard let context = CGContext(consumer: consumer, mediaBox: &box, nil) else {
             throw ToolError(message: "Could not start a smaller PDF.")
         }
+        let count = max(1, document.pageCount)
+        let pixelCap: CGFloat = clamped < 0.5 ? 1100 : (clamped < 0.7 ? 1500 : 1900)
         for index in 0..<document.pageCount {
             guard let page = document.page(at: index) else { continue }
             let bounds = page.bounds(for: .mediaBox)
+            let longSide = max(bounds.width, bounds.height)
+            let scale = min(1, pixelCap / max(longSide, 1))
             context.beginPDFPage(Self.pageInfo(bounds))
             context.setFillColor(NSColor.white.cgColor)
             context.fill(bounds)
-            if let image = render(page, scale: 1.4),
-               let jpeg = jpegData(image, quality: quality),
+            if let image = render(page, scale: scale),
+               let jpeg = jpegData(image, quality: clamped),
                let source = CGImageSourceCreateWithData(jpeg as CFData, nil),
                let compressed = CGImageSourceCreateImageAtIndex(source, 0, nil) {
                 context.draw(compressed, in: bounds)
@@ -162,12 +168,36 @@ enum PDFJobs {
                 page.draw(with: .mediaBox, to: context)
             }
             context.endPDFPage()
-            progress(Double(index + 1) / Double(document.pageCount))
+            progress(Double(index + 1) / Double(count))
         }
         context.closePDF()
+        if Int64(data.length) >= originalBytes {
+            throw ToolError(message: "This PDF is already as small as it can be. The original was left unchanged.")
+        }
         let output = try Outputs.make(nextTo: url, suffix: "-smaller", ext: "pdf")
         try (data as Data).write(to: output)
         return [output]
+    }
+
+    static func writeForm(to url: URL) throws {
+        let data = NSMutableData()
+        var box = CGRect(x: 0, y: 0, width: 612, height: 792)
+        guard let consumer = CGDataConsumer(data: data as CFMutableData),
+              let context = CGContext(consumer: consumer, mediaBox: &box, nil) else {
+            throw ToolError(message: "Could not start the form PDF.")
+        }
+        context.beginPDFPage(nil)
+        context.endPDFPage()
+        context.closePDF()
+        guard let document = PDFDocument(data: data as Data), let page = document.page(at: 0) else {
+            throw ToolError(message: "Could not open the form PDF.")
+        }
+        let field = PDFAnnotation(bounds: CGRect(x: 72, y: 700, width: 240, height: 22), forType: .widget, withProperties: nil)
+        field.widgetFieldType = .text
+        field.fieldName = "Name"
+        field.widgetStringValue = ""
+        page.addAnnotation(field)
+        guard document.write(to: url) else { throw ToolError(message: "Could not write the form PDF.") }
     }
 
     static func addPassword(url: URL, current: String, password: String) throws -> [URL] {

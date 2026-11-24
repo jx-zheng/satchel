@@ -137,6 +137,7 @@ struct ToolCard: View {
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(scheme == .dark ? Color.white : Color.black)
                         .lineLimit(1)
+                        .minimumScaleFactor(0.8)
                         .frame(maxWidth: .infinity, minHeight: 18, alignment: .leading)
                     Text(tool.summary)
                         .font(.system(size: 12))

@@ -1,0 +1,13 @@
+Satchel test fixtures
+
+face.jpg
+  Official White House photograph of Barack Obama by Pete Souza, 6 December 2012.
+  Public domain as a work of the United States federal government.
+  Source: https://commons.wikimedia.org/wiki/File:President_Barack_Obama.jpg
+  Wikimedia Commons license short name: Public domain (pd).
+  Downloaded as the 960px thumbnail and stored as face.jpg for Vision face detection.
+
+subject.png
+  Original drawing made for Satchel's tests: a simple figure on a flat background.
+  Dedicated to the public domain under CC0 1.0 by the Satchel project.
+  No third-party artwork is included.

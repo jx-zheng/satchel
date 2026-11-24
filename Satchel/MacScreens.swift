@@ -119,6 +119,10 @@ private struct BatteryTool: View {
                 SatchelLog.toolRun(id: ToolID.batteryHealth.rawValue, inputs: 1, outcome: "ok", seconds: RunLog.stamp(start))
             }
         }
+        .onAppear {
+            guard DemoSession.enabled, DemoSession.take(.batteryHealth) else { return }
+            lines = BatteryReader.read()
+        }
     }
 }
 
@@ -493,8 +497,9 @@ final class KeyboardCover {
     private var monitor: Any?
     private var escSince: Date?
 
-    func show() {
-        guard let screen = NSScreen.main else { return }
+    @discardableResult
+    func show() -> Bool {
+        guard let screen = NSScreen.main else { return false }
         let panel = NSPanel(contentRect: screen.frame, styleMask: [.borderless], backing: .buffered, defer: false)
         panel.level = .screenSaver
         panel.backgroundColor = NSColor.black.withAlphaComponent(0.92)
@@ -514,6 +519,7 @@ final class KeyboardCover {
             }
             return nil
         }
+        return true
     }
 
     func hide() {
@@ -559,8 +565,9 @@ final class DeadPixelCover: NSObject {
     private let colors: [NSColor] = [.black, .white, .red, .green, .blue, .gray]
     private var index = 0
 
-    func show() {
-        guard let screen = NSScreen.main else { return }
+    @discardableResult
+    func show() -> Bool {
+        guard let screen = NSScreen.main else { return false }
         index = 0
         let panel = NSPanel(contentRect: screen.frame, styleMask: [.borderless], backing: .buffered, defer: false)
         panel.level = .screenSaver
@@ -574,6 +581,7 @@ final class DeadPixelCover: NSObject {
             self.cycle()
             return nil
         }
+        return true
     }
 
     @objc func cycle() {

@@ -26,6 +26,16 @@ enum Snapshotter {
         }
         let model = AppModel.snapshotModel()
         let tabs: [(String, ToolCategory?)] = [("all", nil)] + ToolCategory.allCases.map { ($0.rawValue, $0) }
+        let toolShots: [(String, ToolID)] = [
+            ("video", .compressVideo),
+            ("audio", .recordAudio),
+            ("images", .removeBackground),
+            ("docs", .mergePDFs),
+            ("text", .transcribe),
+            ("files", .batchRename),
+            ("mac", .storageExplorer),
+            ("dev", .jsonFormatter)
+        ]
         let schemes: [(String, ColorScheme, NSAppearance.Name)] = [
             ("light", .light, .aqua),
             ("dark", .dark, .darkAqua)
@@ -49,6 +59,53 @@ enum Snapshotter {
                     exit(1)
                 }
             }
+            model.category = nil
+            model.openTool = nil
+            model.recents = []
+            model.favorites = []
+            model.query = ""
+            let empty = RootView()
+                .environmentObject(model)
+                .environment(\.colorScheme, scheme)
+                .environment(\.satchelSnapshot, true)
+                .frame(width: 1440, height: 900)
+            do {
+                try render(empty, appearance: appearance, to: folder.appendingPathComponent("home-empty-\(schemeName).png"))
+            } catch {
+                fputs("Snapshot home-empty-\(schemeName) failed: \(error)\n", stderr)
+                exit(1)
+            }
+            model.recents = [.compressVideo, .mergePDFs]
+            model.favorites = [.signPDF]
+            model.query = "pdf"
+            let search = RootView()
+                .environmentObject(model)
+                .environment(\.colorScheme, scheme)
+                .environment(\.satchelSnapshot, true)
+                .frame(width: 1440, height: 900)
+            do {
+                try render(search, appearance: appearance, to: folder.appendingPathComponent("search-\(schemeName).png"))
+            } catch {
+                fputs("Snapshot search-\(schemeName) failed: \(error)\n", stderr)
+                exit(1)
+            }
+            model.query = ""
+            for (name, id) in toolShots {
+                model.openTool = id
+                model.category = ToolRegistry.byID[id]?.category
+                let toolView = RootView()
+                    .environmentObject(model)
+                    .environment(\.colorScheme, scheme)
+                    .environment(\.satchelSnapshot, true)
+                    .frame(width: 1440, height: 900)
+                do {
+                    try render(toolView, appearance: appearance, to: folder.appendingPathComponent("tool-\(name)-\(schemeName).png"))
+                } catch {
+                    fputs("Snapshot tool-\(name)-\(schemeName) failed: \(error)\n", stderr)
+                    exit(1)
+                }
+            }
+            model.openTool = nil
         }
         exit(0)
     }

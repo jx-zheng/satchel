@@ -216,6 +216,12 @@ struct FileJobView<Controls: View>: View {
                 }
             }
         }
+        .onAppear {
+            guard DemoSession.enabled, DemoSession.take(tool), urls.isEmpty,
+                  let files = DemoSession.files[tool], !files.isEmpty else { return }
+            urls = files
+            start()
+        }
     }
 
     private func start() {

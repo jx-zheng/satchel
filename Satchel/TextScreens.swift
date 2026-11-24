@@ -172,6 +172,16 @@ private struct ExtractTextTool: View {
             Text(text).textSelection(.enabled)
             Text(message).foregroundStyle(.secondary)
         }
+        .onAppear {
+            guard DemoSession.enabled, DemoSession.take(.extractText), let file = DemoSession.files[.extractText]?.first else { return }
+            Task {
+                do {
+                    let found = try OCRJobs.text(from: ImageFiles.load(file))
+                    text = found
+                    message = found.isEmpty ? "No text found" : found
+                } catch { message = error.localizedDescription }
+            }
+        }
     }
 }
 

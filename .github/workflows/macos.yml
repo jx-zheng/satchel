@@ -1,0 +1,82 @@
+name: macOS
+
+on:
+  pull_request:
+    paths:
+      - "Satchel/**"
+      - "SatchelCore/**"
+      - "project.yml"
+      - "scripts/**"
+      - ".github/workflows/macos.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate project
+        run: xcodegen generate
+      - name: Build
+        run: >
+          xcodebuild
+          -project Satchel.xcodeproj
+          -scheme Satchel
+          -configuration Release
+          -derivedDataPath "$RUNNER_TEMP/dd"
+          CODE_SIGNING_ALLOWED=NO
+          CODE_SIGNING_REQUIRED=NO
+          build
+      - name: Snapshot and self-test
+        id: verify
+        run: |
+          set -euo pipefail
+          APP="$(find "$RUNNER_TEMP/dd/Build/Products/Release" -name 'Satchel.app' -type d | head -1)"
+          test -n "$APP"
+          codesign --force --deep --sign - "$APP" || true
+          mkdir -p "$RUNNER_TEMP/snap"
+          "$APP/Contents/MacOS/Satchel" --snapshot "$RUNNER_TEMP/snap"
+          find "$RUNNER_TEMP/snap" -name '*.png' | sort
+          set +e
+          "$APP/Contents/MacOS/Satchel" --selftest "$RUNNER_TEMP/snap"
+          code=$?
+          set -e
+          if [ -f "$RUNNER_TEMP/snap/selftest.txt" ]; then
+            cat "$RUNNER_TEMP/snap/selftest.txt"
+          fi
+          echo "selftest=$code" >> "$GITHUB_OUTPUT"
+      - name: Performance
+        if: always()
+        run: |
+          set -euo pipefail
+          APP="$(find "$RUNNER_TEMP/dd/Build/Products/Release" -name 'Satchel.app' -type d | head -1)"
+          test -n "$APP"
+          mkdir -p "$RUNNER_TEMP/snap"
+          rm -f "$RUNNER_TEMP/snap/leak.done" "$RUNNER_TEMP/snap/perf.json"
+          MallocStackLogging=1 "$APP/Contents/MacOS/Satchel" --perf "$RUNNER_TEMP/snap" &
+          pid=$!
+          for _ in $(seq 1 600); do
+            if [ -f "$RUNNER_TEMP/snap/perf.json" ]; then
+              break
+            fi
+            sleep 1
+          done
+          leaks "$pid" -quiet > "$RUNNER_TEMP/snap/leaks.txt" || true
+          touch "$RUNNER_TEMP/snap/leak.done"
+          wait "$pid" || true
+      - name: Upload snapshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: satchel-snapshots
+          path: ${{ runner.temp }}/snap
+          if-no-files-found: error
+      - name: Require self-test
+        if: always()
+        run: test "${{ steps.verify.outputs.selftest }}" = "0"

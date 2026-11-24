@@ -3,6 +3,7 @@ import SwiftUI
 @main
 enum SatchelMain {
     static func main() {
+        Launch.noteBoot()
         if let job = Launch.selfTestJob {
             Task {
                 let code = await SelfTest.runOne(directory: job.directory, toolID: job.tool)
@@ -24,6 +25,10 @@ struct SatchelApp: App {
                 SelfTestDriver(directory: job.directory, only: job.tool)
             } else if let directory = Launch.selfTestDirectory {
                 SelfTestDriver(directory: directory)
+            } else if let directory = Launch.perfDirectory {
+                PerfDriver(directory: directory)
+            } else if let directory = Launch.demoDirectory {
+                DemoRoot(directory: directory, record: !Launch.demoSkipsRecording)
             } else if let directory = Launch.snapshotDirectory {
                 SnapshotDriver(directory: directory)
             } else {
@@ -45,6 +50,27 @@ struct SatchelApp: App {
 }
 
 enum Launch {
+    static let booted = Date()
+
+    static func noteBoot() {}
+
+    static var demoSkipsRecording: Bool {
+        CommandLine.arguments.contains("--demo-norecord")
+    }
+
+    static var demoDirectory: String? { flag("--demo") }
+    static var perfDirectory: String? { flag("--perf") }
+
+    private static func flag(_ name: String) -> String? {
+        let args = CommandLine.arguments
+        guard let index = args.firstIndex(of: name) else { return nil }
+        guard index + 1 < args.count else {
+            fputs("Satchel \(name) needs a directory.\n", stderr)
+            exit(2)
+        }
+        return args[index + 1]
+    }
+
     static var snapshotDirectory: String? {
         let args = CommandLine.arguments
         guard let index = args.firstIndex(of: "--snapshot") else { return nil }

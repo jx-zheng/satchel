@@ -1,0 +1,22 @@
+name: Core
+
+on:
+  pull_request:
+    paths:
+      - "SatchelCore/**"
+      - ".github/workflows/core.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    container: swift:6.0
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test SatchelCore
+        working-directory: SatchelCore
+        run: swift test

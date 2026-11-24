@@ -386,6 +386,28 @@ enum ImageJobs {
         return result
     }
 
+    static func cover(url: URL, rects: [CGRect]) throws -> URL {
+        let image = try ImageFiles.load(url)
+        guard let context = CGContext(
+            data: nil,
+            width: image.width,
+            height: image.height,
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { throw ToolError(message: "Could not cover that image.") }
+        context.draw(image, in: CGRect(x: 0, y: 0, width: CGFloat(image.width), height: CGFloat(image.height)))
+        context.setFillColor(NSColor.black.cgColor)
+        for rect in rects where rect.width > 1 && rect.height > 1 {
+            context.fill(rect)
+        }
+        guard let out = context.makeImage() else { throw ToolError(message: "Could not cover that image.") }
+        let output = try Outputs.make(nextTo: url, suffix: "-redacted", ext: "png")
+        try ImageFiles.write(out, to: output, type: .png, quality: nil)
+        return output
+    }
+
     private static func map(_ urls: [URL], progress: @escaping (Double) -> Void, _ body: (URL) throws -> URL) async throws -> [URL] {
         guard !urls.isEmpty else { throw ToolError(message: "Drop a picture first.") }
         var outputs: [URL] = []

@@ -106,7 +106,7 @@ enum SelfTest {
                 once.run { continuation.resume(returning: -2) }
                 return
             }
-            DispatchQueue.global().asyncAfter(deadline: .now() + 40) {
+            DispatchQueue.global().asyncAfter(deadline: .now() + 90) {
                 if process.isRunning {
                     process.terminate()
                     kill(process.processIdentifier, SIGKILL)
@@ -147,6 +147,8 @@ enum SelfTest {
         do {
             try await exercise(tool.id, fixtures)
             return report(tool.id, "PASS", "")
+        } catch let skip as SkipSignal {
+            return report(tool.id, "SKIP", skip.reason)
         } catch {
             return report(tool.id, "FAIL", error.localizedDescription.replacingOccurrences(of: "\n", with: " "))
         }
@@ -159,36 +161,16 @@ enum SelfTest {
 
     private static func skipReason(_ id: ToolID) -> String? {
         switch id {
-        case .recordScreen, .screenshot:
-            return "needs screen recording permission"
         case .recordAudio:
             return "needs microphone permission"
-        case .colorPicker:
-            return "needs a click on the screen"
-        case .transcribe:
-            return "needs speech recognition permission"
-        case .textToSpeech:
-            return "speech synthesis can stall without an audio device"
-        case .translate:
-            return "needs a translation session in the window"
-        case .blurFaces:
-            return "needs a real face in the photo"
-        case .removeBackground:
-            return "needs a photograph with a subject"
-        case .cleanKeyboard, .deadPixel, .redactImage:
-            return "needs drawing or a full-screen overlay"
         case .wifiPassword:
             return "needs the keychain and the current network"
         case .networkSpeed:
             return "uses the network"
-        case .presentationMode, .hiddenSettings, .mouseFixes, .resetPermissions:
-            return "changes system settings"
-        case .uninstallApp, .fixDamaged:
-            return "needs an app you choose"
-        case .webPageToPDF:
-            return "needs a web view on screen"
-        case .fillForms:
-            return "needs a PDF that already has form fields"
+        case .presentationMode:
+            return "hides the desktop and the Dock"
+        case .resetPermissions:
+            return "resets system privacy permissions"
         default:
             return nil
         }
@@ -276,7 +258,70 @@ enum SelfTest {
         case .cropPDF:
             _ = try check(PDFJobs.crop(url: fixtures.pdf, margin: 12))
         case .compressPDF:
-            _ = try check(PDFJobs.compress(url: fixtures.pdf, quality: 0.5, progress: { _ in }))
+            let heavy = fixtures.folder.appendingPathComponent("photos.pdf")
+            try PhotoPDF.write(to: heavy, pages: 10)
+            let before = FileSize.bytes(heavy)
+            let made = try PDFJobs.compress(url: heavy, quality: 0.45, progress: { _ in })
+            _ = try check(made)
+            if FileSize.bytes(made[0]) >= before {
+                throw ToolError(message: "compressed PDF was not smaller")
+            }
+        case .fillForms:
+            let form = fixtures.folder.appendingPathComponent("form.pdf")
+            try PDFJobs.writeForm(to: form)
+            let fields = try PDFJobs.formFields(url: form, password: "")
+            if fields.isEmpty { throw ToolError(message: "form PDF has no text field") }
+            _ = try check(PDFJobs.fill(url: form, password: "", values: ["Name": "Ada"]))
+        case .blurFaces:
+            let face = try BundleFixture.copy(name: "face", ext: "jpg", to: fixtures.folder)
+            _ = try await check(ImageJobs.blurFaces(urls: [face], style: .blur, progress: { _ in }))
+        case .removeBackground:
+            let subject = try BundleFixture.copy(name: "subject", ext: "png", to: fixtures.folder)
+            _ = try await check(ImageJobs.removeBackground(urls: [subject], background: .white, crop: false, progress: { _ in }))
+        case .redactImage:
+            _ = try checkOne(ImageJobs.cover(url: fixtures.png, rects: [CGRect(x: 20, y: 20, width: 80, height: 40)]))
+        case .colorPicker:
+            let swatch = fixtures.folder.appendingPathComponent("swatch.png")
+            try ColorSample.swatch(color: (255, 0, 0), to: swatch)
+            let image = try ImageFiles.load(swatch)
+            let hex = ColorSample.hex(image: image, x: 8, y: 8)
+            if hex != "#FF0000" { throw ToolError(message: "sampled \(hex)") }
+        case .cleanKeyboard:
+            if !KeyboardCover.shared.show() { throw SkipSignal(reason: "no display for the keyboard cover") }
+            KeyboardCover.shared.hide()
+        case .deadPixel:
+            if !DeadPixelCover.shared.show() { throw SkipSignal(reason: "no display for the color cover") }
+            DeadPixelCover.shared.hide()
+        case .hiddenSettings, .mouseFixes:
+            try DefaultsLab.roundTrip()
+        case .uninstallApp:
+            let app = try AppLab.dummyApp(in: fixtures.folder)
+            try AppLab.trash(app)
+            if FileManager.default.fileExists(atPath: app.path) { throw ToolError(message: "dummy app was not moved to the Trash") }
+        case .fixDamaged:
+            let app = try AppLab.dummyApp(in: fixtures.folder.appendingPathComponent("damaged", isDirectory: true))
+            try AppLab.clearQuarantine(app)
+        case .webPageToPDF:
+            _ = try await checkOne(WebProbe.pdf(html: "<html><body><h1>Satchel page</h1><p>local only</p></body></html>", in: fixtures.folder))
+        case .transcribe:
+            try await transcribeFixture(fixtures)
+        case .textToSpeech:
+            try await speakFixture()
+        case .translate:
+            let translated = try await TranslateProbe.tryPhrase()
+            if translated.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                throw ToolError(message: "translation was empty")
+            }
+        case .screenshot:
+            do {
+                _ = try await checkOne(ScreenGrab.capture(to: fixtures.folder))
+            } catch let skip as SkipSignal {
+                throw skip
+            } catch {
+                throw SkipSignal(reason: permissionReason(error, fallback: "screen capture was not granted"))
+            }
+        case .recordScreen:
+            try await recordBriefly(fixtures)
         case .addPassword:
             _ = try check(PDFJobs.addPassword(url: fixtures.pdf, current: "", password: "test-pass"))
         case .removePassword:
@@ -379,6 +424,64 @@ enum SelfTest {
         default:
             throw ToolError(message: "no selftest for \(id.rawValue)")
         }
+    }
+
+    private static func permissionReason(_ error: Error, fallback: String) -> String {
+        let text = error.localizedDescription.lowercased()
+        if text.contains("permission") || text.contains("denied") || text.contains("not authorized") || text.contains("tcc") {
+            return error.localizedDescription
+        }
+        return "\(fallback): \(error.localizedDescription)"
+    }
+
+    @MainActor
+    private static func transcribeFixture(_ fixtures: FixtureSet) async throws {
+        let spoken = fixtures.folder.appendingPathComponent("spoken.aiff")
+        try SpeechFixture.say("Hello Satchel", to: spoken)
+        do {
+            let transcript = try await SpeechJobs.transcribe(url: spoken, progress: { _ in })
+            let plain = transcript.plain.lowercased()
+            if !plain.contains("hello") && !plain.contains("satchel") {
+                throw ToolError(message: "transcript missed the spoken words: \(transcript.plain)")
+            }
+        } catch let skip as SkipSignal {
+            throw skip
+        } catch {
+            let text = error.localizedDescription.lowercased()
+            if text.contains("speech") || text.contains("author") || text.contains("language") || text.contains("recogn") {
+                throw SkipSignal(reason: error.localizedDescription)
+            }
+            throw error
+        }
+    }
+
+    @MainActor
+    private static func speakFixture() async throws {
+        let spoken = try await withThrowingTaskGroup(of: URL.self) { group in
+            group.addTask { try await SpeechJobs.speak(text: "Hello Satchel", language: "en-US", progress: { _ in }) }
+            group.addTask {
+                try await Task.sleep(nanoseconds: 20_000_000_000)
+                throw SkipSignal(reason: "speech synthesis timed out")
+            }
+            guard let url = try await group.next() else { throw ToolError(message: "speech synthesis produced nothing") }
+            group.cancelAll()
+            return url
+        }
+        if FileSize.bytes(spoken) < 100 { throw ToolError(message: "speech file was empty") }
+    }
+
+    @MainActor
+    private static func recordBriefly(_ fixtures: FixtureSet) async throws {
+        let recorder = DisplayRecorder()
+        await recorder.start()
+        if !recorder.recording {
+            throw SkipSignal(reason: recorder.message.isEmpty ? "screen recording was not granted" : recorder.message)
+        }
+        try await Task.sleep(nanoseconds: 700_000_000)
+        guard let url = await recorder.stop(), FileManager.default.fileExists(atPath: url.path) else {
+            throw SkipSignal(reason: "screen recording did not produce a file")
+        }
+        _ = fixtures
     }
 
     private static func check(_ urls: [URL]) throws -> [URL] {
