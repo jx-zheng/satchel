@@ -1,0 +1,51 @@
+name: Satchel
+options:
+  bundleIdPrefix: com.kevinzheng
+  deploymentTarget:
+    macOS: "15.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+settings:
+  SWIFT_VERSION: "5.0"
+  MACOSX_DEPLOYMENT_TARGET: "15.0"
+  CODE_SIGN_STYLE: Manual
+  CODE_SIGNING_ALLOWED: NO
+  CODE_SIGNING_REQUIRED: NO
+  ENABLE_HARDENED_RUNTIME: YES
+packages:
+  SatchelCore:
+    path: SatchelCore
+targets:
+  Satchel:
+    type: application
+    platform: macOS
+    sources:
+      - path: Satchel
+    dependencies:
+      - package: SatchelCore
+        product: SatchelCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.kevinzheng.satchel
+        PRODUCT_NAME: Satchel
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: Satchel/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Satchel/Satchel.entitlements
+        ENABLE_HARDENED_RUNTIME: YES
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGNING_ALLOWED: NO
+        CODE_SIGNING_REQUIRED: NO
+        SWIFT_VERSION: "5.0"
+        MACOSX_DEPLOYMENT_TARGET: "15.0"
+        COMBINE_HIDPI_IMAGES: YES
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks"
+schemes:
+  Satchel:
+    build:
+      targets:
+        Satchel: all
+    run:
+      config: Release

@@ -1,0 +1,77 @@
+import SwiftUI
+
+@main
+enum SatchelMain {
+    static func main() {
+        if let job = Launch.selfTestJob {
+            Task {
+                let code = await SelfTest.runOne(directory: job.directory, toolID: job.tool)
+                exit(Int32(code))
+            }
+            dispatchMain()
+        } else {
+            SatchelApp.main()
+        }
+    }
+}
+
+struct SatchelApp: App {
+    @StateObject private var model = AppModel()
+
+    var body: some Scene {
+        WindowGroup {
+            if let job = Launch.selfTestJob {
+                SelfTestDriver(directory: job.directory, only: job.tool)
+            } else if let directory = Launch.selfTestDirectory {
+                SelfTestDriver(directory: directory)
+            } else if let directory = Launch.snapshotDirectory {
+                SnapshotDriver(directory: directory)
+            } else {
+                RootView()
+                    .environmentObject(model)
+            }
+        }
+        .windowStyle(.hiddenTitleBar)
+        .defaultSize(width: 1280, height: 840)
+        .commands {
+            CommandGroup(after: .sidebar) {
+                Button("Search Tools") {
+                    model.focusSearch()
+                }
+                .keyboardShortcut("f", modifiers: .command)
+            }
+        }
+    }
+}
+
+enum Launch {
+    static var snapshotDirectory: String? {
+        let args = CommandLine.arguments
+        guard let index = args.firstIndex(of: "--snapshot") else { return nil }
+        guard index + 1 < args.count else {
+            fputs("Satchel --snapshot needs a directory.\n", stderr)
+            exit(2)
+        }
+        return args[index + 1]
+    }
+
+    static var selfTestJob: (tool: String, directory: String)? {
+        let args = CommandLine.arguments
+        guard let index = args.firstIndex(of: "--selftest-one") else { return nil }
+        guard index + 2 < args.count else {
+            fputs("Satchel --selftest-one needs a tool id and a directory.\n", stderr)
+            exit(2)
+        }
+        return (args[index + 1], args[index + 2])
+    }
+
+    static var selfTestDirectory: String? {
+        let args = CommandLine.arguments
+        guard let index = args.firstIndex(of: "--selftest") else { return nil }
+        guard index + 1 < args.count else {
+            fputs("Satchel --selftest needs a directory.\n", stderr)
+            exit(2)
+        }
+        return args[index + 1]
+    }
+}

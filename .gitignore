@@ -1,6 +1,9 @@
 .build/
-build/
+**/.build/
 DerivedData/
 *.xcuserstate
 xcuserdata/
 .DS_Store
+Satchel.xcodeproj/
+*.xcodeproj/
+xcuserdata/
