@@ -81,6 +81,8 @@ enum PerfRun {
                 (lhs["seconds"] as? Double ?? 0) > (rhs["seconds"] as? Double ?? 0)
             }
             report["slowest"] = Array(ranked.prefix(10))
+            let worst = recorded.compactMap { $0["stallMs"] as? Double }.max() ?? 0
+            report["mainThreadStallDuringToolsMs"] = worst
         } else {
             report["fixtureError"] = "missing tool times"
         }
@@ -230,6 +232,18 @@ final class StallWatch {
     func stop() {
         timer?.invalidate()
         timer = nil
+    }
+
+    /// Let the main run loop deliver a timer tick that observed a stall, then stop.
+    func finish() async -> Double {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            DispatchQueue.main.async {
+                continuation.resume()
+            }
+        }
+        let gap = maxGap
+        stop()
+        return gap
     }
 }
 

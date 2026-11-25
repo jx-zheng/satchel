@@ -60,7 +60,13 @@ enum SelfTest {
                 line = await runChild(tool, directory: directory)
                 if let seconds = readSeconds(root), line.contains(" PASS") || line.contains(" FAIL") {
                     let outcome = line.contains(" FAIL") ? "FAIL" : "PASS"
-                    times.append(["tool": tool.id.rawValue, "seconds": seconds, "outcome": outcome])
+                    let stallMs = (readSecondsFile(root, name: "stall.txt") ?? 0) * 1000
+                    times.append([
+                        "tool": tool.id.rawValue,
+                        "seconds": seconds,
+                        "outcome": outcome,
+                        "stallMs": stallMs
+                    ])
                 }
             }
             emit(line)
@@ -76,7 +82,11 @@ enum SelfTest {
     }
 
     private static func readSeconds(_ root: URL) -> Double? {
-        let url = root.appendingPathComponent("seconds.txt")
+        readSecondsFile(root, name: "seconds.txt")
+    }
+
+    private static func readSecondsFile(_ root: URL, name: String) -> Double? {
+        let url = root.appendingPathComponent(name)
         defer { try? FileManager.default.removeItem(at: url) }
         guard let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
         return Double(text.trimmingCharacters(in: .whitespacesAndNewlines))
@@ -91,10 +101,16 @@ enum SelfTest {
             try? line.write(to: root.appendingPathComponent("result.txt"), atomically: true, encoding: .utf8)
             return 1
         }
+        let watch = StallWatch()
+        watch.start()
         let started = Date()
-        let line = await evaluate(tool, fixtures: fixtures)
+        let line = await Task.detached(priority: .userInitiated) {
+            await SelfTest.evaluate(tool, fixtures: fixtures)
+        }.value
+        let stall = await watch.finish()
         let seconds = String(format: "%.6f\n", Date().timeIntervalSince(started))
         try? seconds.write(to: root.appendingPathComponent("seconds.txt"), atomically: true, encoding: .utf8)
+        try? String(format: "%.6f\n", stall).write(to: root.appendingPathComponent("stall.txt"), atomically: true, encoding: .utf8)
         try? line.write(to: root.appendingPathComponent("result.txt"), atomically: true, encoding: .utf8)
         return line.contains(" FAIL ") ? 1 : 0
     }
@@ -188,7 +204,6 @@ enum SelfTest {
         fflush(stdout)
     }
 
-    @MainActor
     private static func evaluate(_ tool: ToolDefinition, fixtures: FixtureSet) async -> String {
         if tool.status != .working {
             return report(tool.id, "SKIP", "placeholder")
@@ -228,7 +243,6 @@ enum SelfTest {
         }
     }
 
-    @MainActor
     private static func exercise(_ id: ToolID, _ fixtures: FixtureSet) async throws {
         switch id {
         case .changeSpeed:

@@ -19,6 +19,10 @@ if final > base + 30 * mib:
     raise SystemExit(f"final RSS {final} is more than 30 MiB above the post-tabs {base}")
 if gap <= 0 or gap >= 0.1:
     raise SystemExit(f"main-thread gap {gap} seconds is not under 100 ms")
+stall = float(report["mainThreadStallDuringToolsMs"])
+print("main thread stall during tools ms", stall)
+if stall >= 250:
+    raise SystemExit(f"main-thread stall during tools {stall} ms is not under 250 ms")
 tools = report["tools"]
 slowest = report["slowest"]
 if len(tools) < 90 or len(slowest) != 10:
