@@ -379,29 +379,41 @@ private struct MediaInfoTool: View {
 
 private struct RecordScreenTool: View {
     @StateObject private var recorder = DisplayRecorder()
+    @StateObject private var permission = PermissionCoordinator(tool: .recordScreen)
     var body: some View {
         ToolPage(tool: ToolRegistry.definition(.recordScreen)) {
             Text("macOS will ask for screen recording permission the first time. The movie is saved in Movies/Satchel.")
                 .font(.system(size: 13))
                 .foregroundStyle(.secondary)
             PrimaryButton(title: recorder.recording ? "Stop and save" : "Record display", enabled: true) {
-                Task {
-                    if recorder.recording {
-                        let start = Date()
-                        if let url = await recorder.stop() {
-                            recorder.message = "Saved \(url.lastPathComponent)"
-                            SatchelLog.toolRun(id: ToolID.recordScreen.rawValue, inputs: 1, outcome: "ok", seconds: RunLog.stamp(start))
-                        }
-                    } else {
-                        await recorder.start()
-                    }
-                }
+                Task { await toggle() }
             }
+            PermissionBannerSlot(coordinator: permission)
             if recorder.recording { ProgressView().controlSize(.small) }
             Text(recorder.message).font(.system(size: 13))
             if let url = recorder.output, !recorder.recording {
                 Button("Reveal in Finder") { Outputs.reveal(url) }
             }
+        }
+    }
+
+    private func toggle() async {
+        if recorder.recording {
+            let start = Date()
+            if let url = await recorder.stop() {
+                recorder.message = "Saved \(url.lastPathComponent)"
+                SatchelLog.toolRun(id: ToolID.recordScreen.rawValue, inputs: 1, outcome: "ok", seconds: RunLog.stamp(start))
+            }
+            return
+        }
+        guard await permission.ensure(.screenRecording, retry: { Task { await toggle() } }) else {
+            recorder.message = ""
+            return
+        }
+        await recorder.start()
+        if let denied = recorder.deniedPermission {
+            recorder.message = ""
+            permission.presentDenied(denied, retry: { Task { await toggle() } })
         }
     }
 }
@@ -410,6 +422,7 @@ final class DisplayRecorder: NSObject, ObservableObject, SCStreamOutput, SCStrea
     @Published var recording = false
     @Published var message = ""
     @Published var output: URL?
+    @Published var deniedPermission: PermissionKind?
     private var stream: SCStream?
     private var writer: AVAssetWriter?
     private var input: AVAssetWriterInput?
@@ -417,6 +430,7 @@ final class DisplayRecorder: NSObject, ObservableObject, SCStreamOutput, SCStrea
     private let queue = DispatchQueue(label: "satchel.screen.record")
 
     func start() async {
+        await MainActor.run { self.deniedPermission = nil }
         do {
             let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
             guard let display = content.displays.first else { throw ToolError(message: "No display is available.") }
@@ -455,6 +469,7 @@ final class DisplayRecorder: NSObject, ObservableObject, SCStreamOutput, SCStrea
             }
         } catch {
             await MainActor.run {
+                self.deniedPermission = PermissionClassifier.isScreenCaptureDenied(error) ? .screenRecording : nil
                 self.message = error.localizedDescription
                 self.recording = false
             }
@@ -487,6 +502,7 @@ final class DisplayRecorder: NSObject, ObservableObject, SCStreamOutput, SCStrea
 }
 
 private struct RecordAudioTool: View {
+    @StateObject private var permission = PermissionCoordinator(tool: .recordAudio)
     @State private var recorder: AVAudioRecorder?
     @State private var recording = false
     @State private var message = ""
@@ -500,6 +516,7 @@ private struct RecordAudioTool: View {
             PrimaryButton(title: recording ? "Stop" : "Record", enabled: true) {
                 Task { await toggle() }
             }
+            PermissionBannerSlot(coordinator: permission)
             Text(message).font(.system(size: 13))
             if let file, !recording {
                 Button("Reveal in Finder") { Outputs.reveal(file) }
@@ -515,9 +532,8 @@ private struct RecordAudioTool: View {
             SatchelLog.toolRun(id: ToolID.recordAudio.rawValue, inputs: 1, outcome: "ok", seconds: "0s")
             return
         }
-        let allowed = await AVAudioApplication.requestRecordPermission()
-        guard allowed else {
-            message = "Microphone access is off for Satchel."
+        guard await permission.ensure(.microphone, retry: { Task { await toggle() } }) else {
+            message = ""
             return
         }
         do {

@@ -194,6 +194,30 @@ struct FileJobView<Controls: View>: View {
     @State private var progress = 0.0
     @State private var errorText: String?
     @State private var task: Task<Void, Never>?
+    @StateObject private var permission: PermissionCoordinator
+
+    init(
+        tool: ToolID,
+        types: [UTType],
+        prompt: String,
+        actionTitle: String,
+        multiple: Bool = true,
+        tracksSavings: Bool = false,
+        @ViewBuilder controls: @escaping () -> Controls,
+        perform: @escaping ([URL], @escaping (Double) -> Void) async throws -> [URL],
+        onFiles: @escaping ([URL]) -> Void = { _ in }
+    ) {
+        self.tool = tool
+        self.types = types
+        self.prompt = prompt
+        self.actionTitle = actionTitle
+        self.multiple = multiple
+        self.tracksSavings = tracksSavings
+        self.controls = controls
+        self.perform = perform
+        self.onFiles = onFiles
+        _permission = StateObject(wrappedValue: PermissionCoordinator(tool: tool))
+    }
 
     var body: some View {
         let definition = ToolRegistry.definition(tool)
@@ -246,6 +270,7 @@ struct FileJobView<Controls: View>: View {
                         .buttonStyle(.borderless)
                 }
             }
+            PermissionBannerSlot(coordinator: permission)
             if let errorText {
                 Label(errorText, systemImage: "exclamationmark.triangle.fill")
                     .font(.callout)
@@ -317,7 +342,11 @@ struct FileJobView<Controls: View>: View {
                     model.noteSavings(bytes: before - after, files: made.count)
                 }
             } catch {
-                errorText = error.localizedDescription
+                if permission.handleError(error, targetURL: current.first, retry: { start() }) {
+                    errorText = nil
+                } else {
+                    errorText = error.localizedDescription
+                }
             }
             running = false
             progress = 1

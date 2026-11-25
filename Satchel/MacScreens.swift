@@ -279,12 +279,14 @@ private struct ClipboardTool: View {
 }
 
 private struct StorageTool: View {
+    @StateObject private var permission = PermissionCoordinator(tool: .storageExplorer)
     @State private var rows: [(String, URL, Int64)] = []
     @State private var message = ""
     @State private var pending: URL?
     var body: some View {
         ToolPage(tool: ToolRegistry.definition(.storageExplorer)) {
             PrimaryButton(title: "Scan common space hogs", enabled: true) { scan() }
+            PermissionBannerSlot(coordinator: permission)
             ForEach(rows, id: \.1.path) { row in
                 HStack {
                     VStack(alignment: .leading) {
@@ -308,7 +310,11 @@ private struct StorageTool: View {
                         try FileManager.default.trashItem(at: pending, resultingItemURL: nil)
                         message = "Moved to the Trash."
                         rows.removeAll { $0.1 == pending }
-                    } catch { message = error.localizedDescription }
+                    } catch {
+                        if !permission.handleError(error, targetURL: pending, retry: { scan() }) {
+                            message = error.localizedDescription
+                        }
+                    }
                 }
                 pending = nil
             }
@@ -317,28 +323,49 @@ private struct StorageTool: View {
     }
 
     private func scan() {
-        let start = Date()
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let paths: [(String, String)] = [
-            ("Xcode DerivedData", "Library/Developer/Xcode/DerivedData"),
-            ("iOS Simulators", "Library/Developer/CoreSimulator"),
-            ("Xcode archives", "Library/Developer/Xcode/Archives"),
-            ("Device support", "Library/Developer/Xcode/iOS DeviceSupport"),
-            ("Caches", "Library/Caches"),
-            ("Logs", "Library/Logs"),
-            ("iPhone backups", "Library/Application Support/MobileSync/Backup"),
-            ("Downloads", "Downloads")
-        ]
-        rows = paths.compactMap { label, relative in
-            let url = home.appendingPathComponent(relative)
-            guard FileManager.default.fileExists(atPath: url.path) else { return nil }
-            return (label, url, FileSize.directory(url))
-        }.sorted { $0.2 > $1.2 }
-        SatchelLog.toolRun(id: ToolID.storageExplorer.rawValue, inputs: rows.count, outcome: "ok", seconds: RunLog.stamp(start))
+        Task {
+            guard await permission.ensure(.fullDiskAccess, retry: { scan() }) else {
+                message = ""
+                return
+            }
+            let start = Date()
+            let home = FileManager.default.homeDirectoryForCurrentUser
+            let paths: [(String, String)] = [
+                ("Xcode DerivedData", "Library/Developer/Xcode/DerivedData"),
+                ("iOS Simulators", "Library/Developer/CoreSimulator"),
+                ("Xcode archives", "Library/Developer/Xcode/Archives"),
+                ("Device support", "Library/Developer/Xcode/iOS DeviceSupport"),
+                ("Caches", "Library/Caches"),
+                ("Logs", "Library/Logs"),
+                ("iPhone backups", "Library/Application Support/MobileSync/Backup"),
+                ("Downloads", "Downloads")
+            ]
+            var denied: (PermissionKind, URL)?
+            var collected: [(String, URL, Int64)] = []
+            for (label, relative) in paths {
+                let url = home.appendingPathComponent(relative)
+                guard FileManager.default.fileExists(atPath: url.path) else { continue }
+                do {
+                    _ = try FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: nil)
+                    collected.append((label, url, FileSize.directory(url)))
+                } catch {
+                    if let kind = PermissionClassifier.classify(error: error, targetURL: url) {
+                        denied = (kind, url)
+                    }
+                }
+            }
+            if let denied {
+                permission.presentDenied(denied.0, retry: { scan() })
+                if collected.isEmpty { return }
+            }
+            rows = collected.sorted { $0.2 > $1.2 }
+            SatchelLog.toolRun(id: ToolID.storageExplorer.rawValue, inputs: rows.count, outcome: "ok", seconds: RunLog.stamp(start))
+        }
     }
 }
 
 private struct WiFiTool: View {
+    @StateObject private var permission = PermissionCoordinator(tool: .wifiPassword)
     @State private var message = "Looks up the current network, then asks the keychain for its saved password."
     @State private var qr: NSImage?
     var body: some View {
@@ -346,27 +373,39 @@ private struct WiFiTool: View {
             Text(message).textSelection(.enabled)
             if let qr { Image(nsImage: qr).interpolation(.none).frame(width: 160, height: 160) }
             PrimaryButton(title: "Show password", enabled: true) { load() }
+            PermissionBannerSlot(coordinator: permission)
         }
     }
 
     private func load() {
-        let start = Date()
-        let ssid = CWWiFiClient.shared().interface()?.ssid()
-            ?? parseSSID(Commands.run("/usr/sbin/networksetup", ["-getairportnetwork", "en0"]).output)
-        guard let ssid, !ssid.isEmpty else {
-            message = "Could not read the Wi-Fi name. Location permission lets macOS share it."
-            return
+        Task {
+            guard await permission.ensure(.location, retry: { load() }) else {
+                return
+            }
+            let start = Date()
+            let ssid = CWWiFiClient.shared().interface()?.ssid()
+                ?? parseSSID(Commands.run("/usr/sbin/networksetup", ["-getairportnetwork", "en0"]).output)
+            guard let ssid, !ssid.isEmpty else {
+                message = "No Wi-Fi network is connected, or Wi-Fi is turned off."
+                return
+            }
+            let result = await Task.detached(priority: .userInitiated) {
+                Commands.run("/usr/bin/security", ["find-generic-password", "-D", "AirPort network password", "-a", ssid, "-w"])
+            }.value
+            if result.status != 0 {
+                if PermissionClassifier.isKeychainDenied(status: result.status, output: result.output) {
+                    permission.presentDenied(.keychain, retry: { load() })
+                } else {
+                    message = "Network: \(ssid)\nThe password was not found, or the keychain prompt was cancelled.\n\(result.output)"
+                }
+                SatchelLog.toolRun(id: ToolID.wifiPassword.rawValue, inputs: 1, outcome: "failed", seconds: RunLog.stamp(start))
+                return
+            }
+            let password = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
+            message = "Network: \(ssid)\nPassword: \(password)"
+            qr = qrImage("WIFI:T:WPA;S:\(ssid);P:\(password);;")
+            SatchelLog.toolRun(id: ToolID.wifiPassword.rawValue, inputs: 1, outcome: "ok", seconds: RunLog.stamp(start))
         }
-        let result = Commands.run("/usr/bin/security", ["find-generic-password", "-D", "AirPort network password", "-a", ssid, "-w"])
-        if result.status != 0 {
-            message = "Network: \(ssid)\nThe password was not found, or the keychain prompt was cancelled.\n\(result.output)"
-            SatchelLog.toolRun(id: ToolID.wifiPassword.rawValue, inputs: 1, outcome: "failed", seconds: RunLog.stamp(start))
-            return
-        }
-        let password = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
-        message = "Network: \(ssid)\nPassword: \(password)"
-        qr = qrImage("WIFI:T:WPA;S:\(ssid);P:\(password);;")
-        SatchelLog.toolRun(id: ToolID.wifiPassword.rawValue, inputs: 1, outcome: "ok", seconds: RunLog.stamp(start))
     }
 
     private func parseSSID(_ text: String) -> String? {
@@ -387,6 +426,7 @@ private struct WiFiTool: View {
 }
 
 private struct UninstallTool: View {
+    @StateObject private var permission = PermissionCoordinator(tool: .uninstallApp)
     @State private var app: URL?
     @State private var extras: [URL] = []
     @State private var message = ""
@@ -394,6 +434,7 @@ private struct UninstallTool: View {
     var body: some View {
         ToolPage(tool: ToolRegistry.definition(.uninstallApp)) {
             PrimaryButton(title: "Choose an app", enabled: true) { choose() }
+            PermissionBannerSlot(coordinator: permission)
             if let app { Text(app.path).font(.system(size: 12)) }
             ForEach(extras, id: \.path) { Text($0.path).font(.system(size: 11)).lineLimit(1) }
             PrimaryButton(title: "Move to Trash", enabled: app != nil) { confirm = true }
@@ -406,21 +447,26 @@ private struct UninstallTool: View {
     }
 
     private func choose() {
-        let panel = NSOpenPanel()
-        panel.allowedContentTypes = MediaTypes.apps
-        panel.canChooseDirectories = false
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        if url.lastPathComponent == "Satchel.app" {
-            message = "Satchel will not uninstall itself."
-            return
+        Task {
+            guard await permission.ensure(.fullDiskAccess, retry: { choose() }) else {
+                return
+            }
+            let panel = NSOpenPanel()
+            panel.allowedContentTypes = MediaTypes.apps
+            panel.canChooseDirectories = false
+            guard panel.runModal() == .OK, let url = panel.url else { return }
+            if url.lastPathComponent == "Satchel.app" {
+                message = "Satchel will not uninstall itself."
+                return
+            }
+            if url.path.hasPrefix("/System") {
+                message = "System apps are left alone."
+                return
+            }
+            app = url
+            let bundle = Bundle(url: url)?.bundleIdentifier
+            extras = related(bundle: bundle, name: url.deletingPathExtension().lastPathComponent)
         }
-        if url.path.hasPrefix("/System") {
-            message = "System apps are left alone."
-            return
-        }
-        app = url
-        let bundle = Bundle(url: url)?.bundleIdentifier
-        extras = related(bundle: bundle, name: url.deletingPathExtension().lastPathComponent)
     }
 
     private func related(bundle: String?, name: String) -> [URL] {
@@ -429,11 +475,21 @@ private struct UninstallTool: View {
         var found: [URL] = []
         for root in roots {
             let folder = home.appendingPathComponent(root)
-            guard let items = try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil) else { continue }
-            for item in items {
-                let itemName = item.lastPathComponent
-                if let bundle, itemName.contains(bundle) { found.append(item) }
-                else if itemName == name || itemName == "\(name).plist" { found.append(item) }
+            guard FileManager.default.fileExists(atPath: folder.path) else { continue }
+            do {
+                let items = try FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)
+                for item in items {
+                    let itemName = item.lastPathComponent
+                    if let bundle, itemName.contains(bundle) { found.append(item) }
+                    else if itemName == name || itemName == "\(name).plist" { found.append(item) }
+                }
+            } catch {
+                _ = permission.handleError(error, targetURL: folder, retry: {
+                    if let app {
+                        let b = Bundle(url: app)?.bundleIdentifier
+                        extras = related(bundle: b, name: app.deletingPathExtension().lastPathComponent)
+                    }
+                })
             }
         }
         return found
@@ -446,7 +502,12 @@ private struct UninstallTool: View {
             do {
                 try FileManager.default.trashItem(at: url, resultingItemURL: nil)
                 count += 1
-            } catch { message = error.localizedDescription }
+            } catch {
+                if !permission.handleError(error, targetURL: url, retry: { trash() }) {
+                    message = error.localizedDescription
+                }
+                return
+            }
         }
         message = "Moved \(count) items to the Trash."
         SatchelLog.toolRun(id: ToolID.uninstallApp.rawValue, inputs: count, outcome: "ok", seconds: "0s")
@@ -599,6 +660,7 @@ final class DeadPixelCover: NSObject {
 }
 
 private struct EjectTool: View {
+    @StateObject private var permission = PermissionCoordinator(tool: .ejectDisks)
     @State private var names: [String] = []
     @State private var urls: [URL] = []
     @State private var message = ""
@@ -608,6 +670,7 @@ private struct EjectTool: View {
             PrimaryButton(title: "List removable disks", enabled: true) { refresh() }
             ForEach(names, id: \.self) { Text($0) }
             PrimaryButton(title: "Eject all", enabled: !urls.isEmpty) { confirm = true }
+            PermissionBannerSlot(coordinator: permission)
             Text(message).foregroundStyle(.secondary)
         }
         .confirmationDialog("Eject \(names.joined(separator: ", "))?", isPresented: $confirm) {
@@ -633,7 +696,13 @@ private struct EjectTool: View {
             do {
                 try NSWorkspace.shared.unmountAndEjectDevice(at: url)
                 ejected += 1
-            } catch { message = error.localizedDescription }
+            } catch {
+                if PermissionClassifier.isPermissionError(error) {
+                    permission.presentDenied(.removableVolumes, retry: { eject() })
+                    return
+                }
+                message = error.localizedDescription
+            }
         }
         message = "Ejected \(ejected)."
         SatchelLog.toolRun(id: ToolID.ejectDisks.rawValue, inputs: ejected, outcome: "ok", seconds: "0s")
@@ -642,17 +711,23 @@ private struct EjectTool: View {
 }
 
 private struct LoginTool: View {
+    @StateObject private var permission = PermissionCoordinator(tool: .loginItems)
     @State private var files: [URL] = []
     @State private var pending: URL?
+    @State private var message = ""
     var body: some View {
         ToolPage(tool: ToolRegistry.definition(.loginItems)) {
             PrimaryButton(title: "Refresh", enabled: true) { load() }
+            PermissionBannerSlot(coordinator: permission)
             ForEach(files, id: \.path) { url in
                 HStack {
                     Text(url.deletingPathExtension().lastPathComponent).lineLimit(1)
                     Spacer()
                     Button("Trash") { pending = url }
                 }
+            }
+            if !message.isEmpty {
+                Text(message).font(.system(size: 12)).foregroundStyle(.secondary)
             }
             Text("These are the property lists in your user LaunchAgents folder. Trashing one stops it from loading at login.")
                 .font(.system(size: 12))
@@ -662,8 +737,14 @@ private struct LoginTool: View {
         .confirmationDialog("Move this launch agent to the Trash?", isPresented: Binding(get: { pending != nil }, set: { if !$0 { pending = nil } })) {
             Button("Move to Trash", role: .destructive) {
                 if let pending {
-                    try? FileManager.default.trashItem(at: pending, resultingItemURL: nil)
-                    SatchelLog.toolRun(id: ToolID.loginItems.rawValue, inputs: 1, outcome: "ok", seconds: "0s")
+                    do {
+                        try FileManager.default.trashItem(at: pending, resultingItemURL: nil)
+                        SatchelLog.toolRun(id: ToolID.loginItems.rawValue, inputs: 1, outcome: "ok", seconds: "0s")
+                    } catch {
+                        if !permission.handleError(error, targetURL: pending, retry: { load() }) {
+                            message = error.localizedDescription
+                        }
+                    }
                 }
                 pending = nil
                 load()
@@ -674,11 +755,25 @@ private struct LoginTool: View {
 
     private func load() {
         let folder = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/LaunchAgents")
-        files = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil))?.filter { $0.pathExtension == "plist" } ?? []
+        guard FileManager.default.fileExists(atPath: folder.path) else {
+            files = []
+            return
+        }
+        do {
+            files = try FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)
+                .filter { $0.pathExtension == "plist" }
+            permission.clear()
+        } catch {
+            files = []
+            if !permission.handleError(error, targetURL: folder, retry: { load() }) {
+                message = error.localizedDescription
+            }
+        }
     }
 }
 
 private struct QuarantineTool: View {
+    @StateObject private var permission = PermissionCoordinator(tool: .fixDamaged)
     @State private var app: URL?
     @State private var info = ""
     @State private var confirm = false
@@ -687,6 +782,7 @@ private struct QuarantineTool: View {
             PrimaryButton(title: "Choose an app", enabled: true) { choose() }
             Text(info).font(.system(size: 12, design: .monospaced)).textSelection(.enabled)
             PrimaryButton(title: "Clear quarantine", enabled: app != nil) { confirm = true }
+            PermissionBannerSlot(coordinator: permission)
         }
         .confirmationDialog("Remove the quarantine flag so macOS will try to open this app?", isPresented: $confirm) {
             Button("Clear quarantine", role: .destructive) { clear() }
@@ -706,7 +802,12 @@ private struct QuarantineTool: View {
     private func clear() {
         guard let app else { return }
         let result = Commands.run("/usr/bin/xattr", ["-d", "com.apple.quarantine", app.path])
-        info = result.status == 0 ? "Quarantine flag removed." : result.output
+        if result.status != 0 && (result.output.localizedCaseInsensitiveContains("operation not permitted") || result.output.localizedCaseInsensitiveContains("permission denied")) {
+            permission.presentDenied(.appManagement, retry: { clear() })
+            info = ""
+        } else {
+            info = result.status == 0 ? "Quarantine flag removed." : result.output
+        }
         SatchelLog.toolRun(id: ToolID.fixDamaged.rawValue, inputs: 1, outcome: result.status == 0 ? "ok" : "failed", seconds: "0s")
     }
 }

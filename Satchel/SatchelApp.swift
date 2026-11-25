@@ -50,6 +50,17 @@ enum SatchelMain {
                 exit(ok ? 0 : 1)
             }
             dispatchMain()
+        } else if CommandLine.arguments.contains("--permission-gate") {
+            Task { @MainActor in
+                do {
+                    try await PermissionGateProbe.verifyAll()
+                    exit(0)
+                } catch {
+                    fputs("permission-gate failed: \(error.localizedDescription)\n", stderr)
+                    exit(1)
+                }
+            }
+            dispatchMain()
         } else if let job = Launch.selfTestJob {
             let app = NSApplication.shared
             app.setActivationPolicy(.accessory)

@@ -89,6 +89,7 @@ private struct CaseConverterTool: View {
 }
 
 private struct TranscribeTool: View {
+    @StateObject private var permission = PermissionCoordinator(tool: .transcribe)
     @State private var url: URL?
     @State private var format = "txt"
     @State private var text = ""
@@ -109,6 +110,7 @@ private struct TranscribeTool: View {
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
             PrimaryButton(title: running ? "Transcribing…" : "Transcribe", enabled: url != nil && !running) { run() }
+            PermissionBannerSlot(coordinator: permission)
             if running { ProgressView(value: progress) }
             if !text.isEmpty {
                 Text(text).font(.system(size: 13, design: .monospaced)).textSelection(.enabled)
@@ -119,10 +121,14 @@ private struct TranscribeTool: View {
 
     private func run() {
         guard let url else { return }
-        running = true
-        text = ""
         let chosen = format
         Task {
+            guard await permission.ensure(.speechRecognition, retry: { run() }) else {
+                message = ""
+                return
+            }
+            running = true
+            text = ""
             do {
                 let start = Date()
                 let result = try await SpeechJobs.transcribe(url: url) { progress = $0 }
@@ -139,7 +145,13 @@ private struct TranscribeTool: View {
                 message = "Saved \(output.lastPathComponent)"
                 SatchelLog.toolRun(id: ToolID.transcribe.rawValue, inputs: 1, outcome: "ok", seconds: RunLog.stamp(start))
             } catch {
-                message = error.localizedDescription
+                let lower = error.localizedDescription.lowercased()
+                if lower.contains("speech recognition") && (lower.contains("off") || lower.contains("denied") || lower.contains("author")) {
+                    permission.presentDenied(.speechRecognition, retry: { run() })
+                    message = ""
+                } else {
+                    message = error.localizedDescription
+                }
                 SatchelLog.toolRun(id: ToolID.transcribe.rawValue, inputs: 1, outcome: "failed", seconds: "0s")
             }
             running = false
