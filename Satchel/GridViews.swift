@@ -3,60 +3,47 @@ import SatchelCore
 
 struct CategoryGrid: View {
     @EnvironmentObject private var model: AppModel
+    @Environment(\.colorScheme) private var scheme
     let category: ToolCategory
 
     var body: some View {
         let tools = ToolRegistry.tools(in: category)
         ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 16) {
                 header(count: tools.count)
-                ToolGrid(tools: tools)
+                grouped(tools)
             }
-            .padding(.horizontal, 22)
-            .padding(.bottom, 22)
+            .padding(.horizontal, 28)
+            .padding(.top, 22)
+            .padding(.bottom, 28)
+            .frame(maxWidth: 920, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
     private func header(count: Int) -> some View {
-        HStack(alignment: .center) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("\(count) tools · \(category.tagline)")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.secondary)
-                Text(category.title)
-                    .font(.system(size: 34, weight: .bold))
-            }
-            Spacer()
-            recentChips
+        VStack(alignment: .leading, spacing: 4) {
+            Text(category.title)
+                .font(.largeTitle.weight(.semibold))
+                .fixedSize(horizontal: false, vertical: true)
+            Text("\(count) tools · \(category.tagline)")
+                .font(.title3)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(.top, 6)
     }
 
-    private var recentChips: some View {
-        let ids = model.homePlan.recentIDs
-        return VStack(alignment: .trailing, spacing: 6) {
-            Text("Recent")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.secondary)
-            HStack(spacing: 6) {
-                if ids.isEmpty {
-                    Text("None yet")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
-                } else {
-                    ForEach(ids, id: \.self) { id in
-                        if let tool = ToolRegistry.byID[id] {
-                            Button(tool.name) { model.open(id) }
-                                .buttonStyle(.plain)
-                                .font(.system(size: 12, weight: .medium))
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 6)
-                                .background(Capsule().fill(Color.primary.opacity(0.06)))
-                        }
-                    }
+    private func grouped(_ tools: [ToolDefinition]) -> some View {
+        LazyVStack(spacing: 0) {
+            ForEach(Array(tools.enumerated()), id: \.element.id) { index, tool in
+                ToolRow(tool: tool, selected: model.selection == tool.id)
+                if index < tools.count - 1 {
+                    Divider().padding(.leading, 56)
                 }
             }
         }
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Palette.card(scheme)))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Palette.hairline(scheme, strong: false)))
     }
 }
 
@@ -67,103 +54,82 @@ struct ResultGrid: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 4) {
                     Text(tools.isEmpty ? "No matches" : "\(tools.count) tools")
-                        .font(.system(size: 13, weight: .medium))
+                        .font(.subheadline)
                         .foregroundStyle(.secondary)
                     Text(tools.isEmpty ? "Nothing for “\(query)”" : "Search")
-                        .font(.system(size: 34, weight: .bold))
+                        .font(.largeTitle.weight(.semibold))
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-                .padding(.top, 6)
                 if tools.isEmpty {
-                    Text("Try a shorter word, like “pdf”, “audio”, or “rename”.")
-                        .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Try a shorter word, such as pdf, audio, or rename.")
+                            .font(.body)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.vertical, 12)
                 } else {
-                    ToolGrid(tools: tools)
+                    LazyVStack(spacing: 0) {
+                        ForEach(Array(tools.enumerated()), id: \.element.id) { index, tool in
+                            ToolRow(tool: tool, selected: model.selection == tool.id)
+                            if index < tools.count - 1 {
+                                Divider().padding(.leading, 56)
+                            }
+                        }
+                    }
+                    .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color(nsColor: .controlBackgroundColor)))
+                    .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.primary.opacity(0.08)))
                 }
             }
-            .padding(.horizontal, 22)
-            .padding(.bottom, 22)
+            .padding(.horizontal, 28)
+            .padding(.top, 22)
+            .padding(.bottom, 28)
+            .frame(maxWidth: 920, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 }
 
-struct ToolGrid: View {
-    @EnvironmentObject private var model: AppModel
-    let tools: [ToolDefinition]
-
-    var body: some View {
-        let columns = Array(repeating: GridItem(.flexible(), spacing: 14), count: 5)
-        LazyVGrid(columns: columns, spacing: 14) {
-            ForEach(tools) { tool in
-                ToolCard(tool: tool, selected: model.selection == tool.id)
-                    .gridCellColumns(tool.spansTwoColumns ? 2 : 1)
-            }
-        }
-    }
-
-}
-
-struct ToolCard: View {
+struct ToolRow: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.colorScheme) private var scheme
     let tool: ToolDefinition
     var selected: Bool
-    @State private var hovering = false
 
     var body: some View {
         Button {
             model.open(tool.id)
         } label: {
-            VStack(alignment: .leading, spacing: 0) {
-                ZStack(alignment: .topTrailing) {
-                    ToolArt(tool: tool)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 124)
-                        .padding(8)
-                    if tool.status == .placeholder {
-                        Text("Soon")
-                            .font(.system(size: 10, weight: .bold))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 7)
-                            .padding(.vertical, 3)
-                            .background(Capsule().fill(Color.black.opacity(0.55)))
-                            .padding(14)
-                    }
-                }
-                VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .center, spacing: 12) {
+                ToolArt(tool: tool, compact: true)
+                    .frame(width: 32, height: 32)
+                VStack(alignment: .leading, spacing: 2) {
                     Text(tool.name)
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(scheme == .dark ? Color.white : Color.black)
+                        .font(.body.weight(.medium))
+                        .foregroundStyle(.primary)
                         .lineLimit(1)
-                        .frame(maxWidth: .infinity, minHeight: 18, alignment: .leading)
+                        .truncationMode(.tail)
                     Text(tool.summary)
-                        .font(.system(size: 12))
-                        .foregroundStyle(Palette.secondaryText(scheme))
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
-                        .frame(maxWidth: .infinity, minHeight: 32, alignment: .topLeading)
                 }
-                .padding(.horizontal, 12)
-                .padding(.bottom, 12)
+                Spacer(minLength: 12)
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.tertiary)
             }
-            .frame(maxWidth: .infinity, minHeight: 196, alignment: .top)
-            .background(Palette.card(scheme))
-            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .strokeBorder(
-                        (hovering || selected)
-                            ? (scheme == .dark ? Color.white.opacity(0.72) : Color.black.opacity(0.18))
-                            : Palette.hairline(scheme, strong: false),
-                        lineWidth: hovering || selected ? 1.25 : 1
-                    )
-            )
-            .shadow(color: (hovering || selected) ? Color.white.opacity(scheme == .dark ? 0.18 : 0) : .clear, radius: 10)
-            .shadow(color: scheme == .dark ? .clear : Color.black.opacity(hovering ? 0.08 : 0.04), radius: 12, y: 6)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(selected ? Palette.accent.opacity(scheme == .dark ? 0.22 : 0.10) : Color.clear)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .onHover { hovering = $0 }
+        .accessibilityLabel(tool.name)
+        .accessibilityHint(tool.summary)
     }
 }

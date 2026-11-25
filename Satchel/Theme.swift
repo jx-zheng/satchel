@@ -1,53 +1,52 @@
+import AppKit
 import SwiftUI
 
 enum Palette {
-    static let accent = Color(red: 0.0, green: 0.478, blue: 1.0)
+    /// Quiet indigo, not the system-blue used by the earlier layout.
+    static let accent = Color(red: 0.31, green: 0.35, blue: 0.70)
 
     static func canvasTop(_ scheme: ColorScheme) -> Color {
-        scheme == .dark
-            ? Color(red: 0.07, green: 0.08, blue: 0.095)
-            : Color(red: 0.90, green: 0.945, blue: 0.935)
+        Color(nsColor: scheme == .dark ? .windowBackgroundColor : .windowBackgroundColor)
     }
 
     static func canvasBottom(_ scheme: ColorScheme) -> Color {
-        scheme == .dark
-            ? Color(red: 0.04, green: 0.045, blue: 0.055)
-            : Color(red: 0.82, green: 0.89, blue: 0.885)
+        canvasTop(scheme)
     }
 
     static func card(_ scheme: ColorScheme) -> Color {
-        scheme == .dark ? Color(red: 0.125, green: 0.14, blue: 0.165) : .white
+        Color(nsColor: .controlBackgroundColor)
     }
 
     static func chip(_ scheme: ColorScheme) -> Color {
-        scheme == .dark ? Color.white.opacity(0.08) : .white
+        Color.primary.opacity(scheme == .dark ? 0.14 : 0.06)
     }
 
     static func track(_ scheme: ColorScheme) -> Color {
-        scheme == .dark ? Color.white.opacity(0.06) : Color.black.opacity(0.05)
+        Color.primary.opacity(scheme == .dark ? 0.10 : 0.05)
     }
 
     static func secondaryText(_ scheme: ColorScheme) -> Color {
-        scheme == .dark
-            ? Color(red: 0.62, green: 0.67, blue: 0.73)
-            : Color(red: 0.36, green: 0.42, blue: 0.46)
+        Color.secondary
     }
 
     static func titleMuted(_ scheme: ColorScheme) -> Color {
-        scheme == .dark
-            ? Color(red: 0.55, green: 0.62, blue: 0.68)
-            : Color(red: 0.42, green: 0.52, blue: 0.56)
+        Color.secondary
     }
 
     static func hairline(_ scheme: ColorScheme, strong: Bool) -> Color {
-        if scheme == .dark {
-            return Color.white.opacity(strong ? 0.72 : 0.10)
-        }
-        return Color.black.opacity(strong ? 0.16 : 0.06)
+        Color.primary.opacity(strong ? 0.28 : (scheme == .dark ? 0.14 : 0.08))
+    }
+
+    static func sidebar(_ scheme: ColorScheme) -> Color {
+        Color(nsColor: scheme == .dark ? .underPageBackgroundColor : .windowBackgroundColor)
     }
 }
 
 private struct SnapshotFlagKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+private struct SampleResultKey: EnvironmentKey {
     static let defaultValue = false
 }
 
@@ -56,17 +55,16 @@ extension EnvironmentValues {
         get { self[SnapshotFlagKey.self] }
         set { self[SnapshotFlagKey.self] = newValue }
     }
+
+    var satchelSampleResult: Bool {
+        get { self[SampleResultKey.self] }
+        set { self[SampleResultKey.self] = newValue }
+    }
 }
 
 struct CanvasBackground: View {
-    @Environment(\.colorScheme) private var scheme
-
     var body: some View {
-        LinearGradient(
-            colors: [Palette.canvasTop(scheme), Palette.canvasBottom(scheme)],
-            startPoint: .top,
-            endPoint: .bottom
-        )
-        .ignoresSafeArea()
+        Color(nsColor: .windowBackgroundColor)
+            .ignoresSafeArea()
     }
 }

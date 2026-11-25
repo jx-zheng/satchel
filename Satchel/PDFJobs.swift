@@ -138,7 +138,9 @@ enum PDFJobs {
     }
 
     static func compress(url: URL, quality: Double, progress: @escaping (Double) -> Void) throws -> [URL] {
+        let originalBytes = FileSize.bytes(url)
         let document = try open(url)
+        let clamped = min(0.82, max(0.35, quality))
         let data = NSMutableData()
         guard let consumer = CGDataConsumer(data: data as CFMutableData) else {
             throw ToolError(message: "Could not start a smaller PDF.")
@@ -147,27 +149,57 @@ enum PDFJobs {
         guard let context = CGContext(consumer: consumer, mediaBox: &box, nil) else {
             throw ToolError(message: "Could not start a smaller PDF.")
         }
+        let count = max(1, document.pageCount)
+        let pixelCap: CGFloat = clamped < 0.5 ? 1100 : (clamped < 0.7 ? 1500 : 1900)
         for index in 0..<document.pageCount {
-            guard let page = document.page(at: index) else { continue }
-            let bounds = page.bounds(for: .mediaBox)
-            context.beginPDFPage(Self.pageInfo(bounds))
-            context.setFillColor(NSColor.white.cgColor)
-            context.fill(bounds)
-            if let image = render(page, scale: 1.4),
-               let jpeg = jpegData(image, quality: quality),
-               let source = CGImageSourceCreateWithData(jpeg as CFData, nil),
-               let compressed = CGImageSourceCreateImageAtIndex(source, 0, nil) {
-                context.draw(compressed, in: bounds)
-            } else {
-                page.draw(with: .mediaBox, to: context)
+            autoreleasepool {
+                guard let page = document.page(at: index) else { return }
+                let bounds = page.bounds(for: .mediaBox)
+                let longSide = max(bounds.width, bounds.height)
+                let scale = min(1, pixelCap / max(longSide, 1))
+                context.beginPDFPage(Self.pageInfo(bounds))
+                context.setFillColor(NSColor.white.cgColor)
+                context.fill(bounds)
+                if let image = render(page, scale: scale),
+                   let jpeg = jpegData(image, quality: clamped),
+                   let source = CGImageSourceCreateWithData(jpeg as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),
+                   let compressed = CGImageSourceCreateImageAtIndex(source, 0, [kCGImageSourceShouldCache: false] as CFDictionary) {
+                    context.draw(compressed, in: bounds)
+                } else {
+                    page.draw(with: .mediaBox, to: context)
+                }
+                context.endPDFPage()
             }
-            context.endPDFPage()
-            progress(Double(index + 1) / Double(document.pageCount))
+            progress(Double(index + 1) / Double(count))
         }
         context.closePDF()
+        if Int64(data.length) >= originalBytes {
+            throw ToolError(message: "This PDF is already as small as it can be. The original was left unchanged.")
+        }
         let output = try Outputs.make(nextTo: url, suffix: "-smaller", ext: "pdf")
         try (data as Data).write(to: output)
         return [output]
+    }
+
+    static func writeForm(to url: URL) throws {
+        let data = NSMutableData()
+        var box = CGRect(x: 0, y: 0, width: 612, height: 792)
+        guard let consumer = CGDataConsumer(data: data as CFMutableData),
+              let context = CGContext(consumer: consumer, mediaBox: &box, nil) else {
+            throw ToolError(message: "Could not start the form PDF.")
+        }
+        context.beginPDFPage(nil)
+        context.endPDFPage()
+        context.closePDF()
+        guard let document = PDFDocument(data: data as Data), let page = document.page(at: 0) else {
+            throw ToolError(message: "Could not open the form PDF.")
+        }
+        let field = PDFAnnotation(bounds: CGRect(x: 72, y: 700, width: 240, height: 22), forType: .widget, withProperties: nil)
+        field.widgetFieldType = .text
+        field.fieldName = "Name"
+        field.widgetStringValue = ""
+        page.addAnnotation(field)
+        guard document.write(to: url) else { throw ToolError(message: "Could not write the form PDF.") }
     }
 
     static func addPassword(url: URL, current: String, password: String) throws -> [URL] {
@@ -347,15 +379,22 @@ enum PDFJobs {
     }
 
     static func markdown(_ text: String, nextTo: URL?) async throws -> URL {
-        let attributed = MarkdownRender.attributed(text)
+        let html = MarkdownHTML.page(text)
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: temp) }
+        let rendered = try await WebProbe.pdf(html: html, in: temp)
         let output: URL
         if let nextTo {
             output = try Outputs.make(nextTo: nextTo, suffix: "-notes", ext: "pdf")
         } else {
             let folder = try Outputs.directory(in: .downloadsDirectory, subfolder: "Satchel")
             output = folder.appendingPathComponent("Notes.pdf")
+            if FileManager.default.fileExists(atPath: output.path) {
+                try FileManager.default.removeItem(at: output)
+            }
         }
-        try await renderAttributed(attributed, to: output)
+        try FileManager.default.copyItem(at: rendered, to: output)
         return output
     }
 
@@ -377,7 +416,7 @@ enum PDFJobs {
             attributed = try NSAttributedString(url: url, options: [.documentType: type], documentAttributes: nil)
         }
         let output = try Outputs.make(nextTo: url, suffix: "-print", ext: "pdf")
-        try await renderAttributed(attributed, to: output)
+        try renderCoreText(attributed, to: output)
         return output
     }
 
@@ -432,34 +471,35 @@ enum PDFJobs {
         return data as Data
     }
 
-    @MainActor
-    private static func renderAttributed(_ text: NSAttributedString, to url: URL) throws {
-        let printInfo = NSPrintInfo.shared.copy() as? NSPrintInfo ?? NSPrintInfo()
-        printInfo.paperSize = NSSize(width: 612, height: 792)
-        printInfo.topMargin = 54
-        printInfo.bottomMargin = 54
-        printInfo.leftMargin = 54
-        printInfo.rightMargin = 54
-        printInfo.isHorizontallyCentered = false
-        printInfo.isVerticallyCentered = false
-        let width = printInfo.paperSize.width - printInfo.leftMargin - printInfo.rightMargin
-        let view = NSTextView(frame: NSRect(x: 0, y: 0, width: width, height: 10_000))
-        view.textContainer?.widthTracksTextView = true
-        view.textContainer?.containerSize = NSSize(width: width, height: .greatestFiniteMagnitude)
-        view.textStorage?.setAttributedString(text)
-        view.isEditable = false
-        if let container = view.textContainer {
-            view.layoutManager?.ensureLayout(for: container)
-        }
-        let data = NSMutableData()
-        let printable = NSRect(x: 0, y: 0, width: width, height: 10_000)
-        let operation = NSPrintOperation.pdfOperation(with: view, inside: printable, to: data, printInfo: printInfo)
-        operation.showsPrintPanel = false
-        operation.showsProgressPanel = false
-        if !operation.run() {
+    static func renderCoreText(_ text: NSAttributedString, to url: URL) throws {
+        var media = CGRect(x: 0, y: 0, width: 612, height: 792)
+        guard let context = CGContext(url as CFURL, mediaBox: &media, nil) else {
             throw ToolError(message: "Could not write the PDF.")
         }
-        try (data as Data).write(to: url)
+        let margin: CGFloat = 54
+        let framesetter = CTFramesetterCreateWithAttributedString(text.length == 0 ? NSAttributedString(string: " ") : text)
+        var index = 0
+        var guardPages = 0
+        let length = max((text.length == 0 ? 1 : text.length), 1)
+        while index < length && guardPages < 80 {
+            context.beginPDFPage(nil)
+            context.setFillColor(CGColor(gray: 1, alpha: 1))
+            context.fill(media)
+            context.saveGState()
+            context.translateBy(x: 0, y: media.height)
+            context.scaleBy(x: 1, y: -1)
+            let textRect = CGRect(x: margin, y: margin, width: media.width - margin * 2, height: media.height - margin * 2)
+            let path = CGPath(rect: textRect, transform: nil)
+            let frame = CTFramesetterCreateFrame(framesetter, CFRange(location: index, length: 0), path, nil)
+            CTFrameDraw(frame, context)
+            context.restoreGState()
+            let visible = CTFrameGetVisibleStringRange(frame)
+            context.endPDFPage()
+            guardPages += 1
+            if visible.length <= 0 { break }
+            index += visible.length
+        }
+        context.closePDF()
     }
 
     private static func docxText(_ url: URL) throws -> String {

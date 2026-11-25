@@ -14,6 +14,8 @@ struct TextToolScreen: View {
         case .captureText: CaptureTextTool()
         case .textToSpeech: SpeechTool()
         case .translate: TranslateTool()
+        case .summarize: SummarizeTool()
+        case .askDocument: AskDocumentTool()
         default:
             if let tool = ToolRegistry.byID[id] { ComingSoonView(tool: tool) }
         }
@@ -172,6 +174,16 @@ private struct ExtractTextTool: View {
             Text(text).textSelection(.enabled)
             Text(message).foregroundStyle(.secondary)
         }
+        .onAppear {
+            guard DemoSession.enabled, DemoSession.take(.extractText), let file = DemoSession.files[.extractText]?.first else { return }
+            Task {
+                do {
+                    let found = try OCRJobs.text(from: ImageFiles.load(file))
+                    text = found
+                    message = found.isEmpty ? "No text found" : found
+                } catch { message = error.localizedDescription }
+            }
+        }
     }
 }
 
@@ -253,6 +265,7 @@ private struct SpeechTool: View {
 }
 
 private struct TranslateTool: View {
+    @Environment(\.satchelSnapshot) private var snapshot
     @EnvironmentObject private var model: AppModel
     @State private var source = "en"
     @State private var target = "es"
@@ -287,7 +300,7 @@ private struct TranslateTool: View {
                 .foregroundStyle(.secondary)
             Text(message).foregroundStyle(.secondary)
         }
-        .translationTask(configuration) { session in
+        .translationTask(snapshot ? nil : configuration) { session in
             let text = await MainActor.run { model.draft(for: .translate) }
             let start = Date()
             do {

@@ -48,6 +48,10 @@ private struct JSONTool: View {
             }
             result
         }
+        .onAppear {
+            guard DemoSession.enabled, DemoSession.take(.jsonFormatter) else { return }
+            run(pretty: true)
+        }
     }
 
     private func run(pretty: Bool) {

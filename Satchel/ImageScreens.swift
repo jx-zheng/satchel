@@ -1,5 +1,4 @@
 import AppKit
-import ScreenCaptureKit
 import SwiftUI
 import SatchelCore
 
@@ -360,17 +359,8 @@ private struct ScreenshotTool: View {
     private func capture() async {
         let start = Date()
         do {
-            let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-            guard let display = content.displays.first else { throw ToolError(message: "No display.") }
-            let filter = SCContentFilter(display: display, excludingWindows: [])
-            let config = SCStreamConfiguration()
-            config.width = display.width
-            config.height = display.height
-            config.showsCursor = true
-            let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
             let folder = try Outputs.directory(in: .desktopDirectory, subfolder: "Satchel")
-            let url = folder.appendingPathComponent("Screenshot-\(Int(Date().timeIntervalSince1970)).png")
-            try ImageFiles.write(image, to: url, type: .png, quality: nil)
+            let url = try await ScreenGrab.capture(to: folder)
             message = "Saved \(url.lastPathComponent)"
             Outputs.reveal(url)
             SatchelLog.toolRun(id: ToolID.screenshot.rawValue, inputs: 1, outcome: "ok", seconds: RunLog.stamp(start))

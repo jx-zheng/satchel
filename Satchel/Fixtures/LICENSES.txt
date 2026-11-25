@@ -1,0 +1,35 @@
+Satchel test fixtures
+
+face.jpg
+  Official White House photograph of Barack Obama by Pete Souza, 6 December 2012.
+  Public domain as a work of the United States federal government.
+  Source: https://commons.wikimedia.org/wiki/File:President_Barack_Obama.jpg
+  Wikimedia Commons license short name: Public domain (pd).
+  Downloaded as the 960px thumbnail and stored as face.jpg for Vision face detection.
+
+subject.png
+  Original drawing made for Satchel's tests: a simple figure on a flat background.
+  Dedicated to the public domain under CC0 1.0 by the Satchel project.
+  No third-party artwork is included.
+
+Tool implementations
+  Burn In Subtitles draws SRT cues with AVFoundation, Core Animation, and AVAssetExportSession.
+  No ffmpeg binary is included or invoked.
+  Clean Up Audio is an original spectral-subtraction routine written for Satchel.
+  It uses the system Accelerate-free FFT in the app and does not ship a third-party denoise model.
+  Convert Audio writes M4A with AVFoundation and WAV, AIFF, and CAF with AVAssetWriter.
+  Word, RTF, HTML, and plain text use NSAttributedString and Core Text.
+  PDF to Word writes a minimal Office Open XML package with the system ditto tool.
+  PowerPoint to PDF reads slide text from the pptx package and may add a Quick Look thumbnail.
+  Excel to PDF reads the first sheet and prints an HTML table with WKWebView.
+  Those Office paths do not include LibreOffice, Microsoft Office, or ffmpeg.
+  Markdown to PDF turns Markdown into HTML with Foundation and prints it with WKWebView.
+  Summarize and Ask a Document use Apple's Foundation Models framework when the SDK and
+  the on-device model are available, and otherwise NaturalLanguage sentence scoring.
+  Download Video uses URLSession. AVAssetDownloadURLSession is not part of the native
+  macOS SDK, so an HLS playlist is saved by fetching its segments. yt-dlp and ffmpeg
+  are not bundled. If the person has installed yt-dlp, Satchel may run that binary
+  for a page link. The yt-dlp program remains under its own license and is not distributed.
+  Display Control reads Core Graphics display modes. Brightness uses IOKit when the
+  display exposes it, and the previous value is restored.
+  No DEVELOPMENT_TEAM or provisioning profile is set. The app is not notarized here.

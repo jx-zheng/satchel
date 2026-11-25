@@ -50,5 +50,27 @@
 	<string>Satchel captures the screen only while you use Screenshot or Record Screen.</string>
 	<key>NSLocationUsageDescription</key>
 	<string>Satchel reads the current Wi-Fi name so it can look up that network’s saved password. Your location is not stored or sent.</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>File</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>public.item</string>
+				<string>public.data</string>
+				<string>public.content</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>

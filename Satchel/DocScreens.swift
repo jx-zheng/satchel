@@ -28,6 +28,10 @@ struct DocToolScreen: View {
         case .wordToPDF: WordPDFTool()
         case .markdownToPDF: MarkdownPDFTool()
         case .webPageToPDF: WebPDFTool()
+        case .pdfToWord: PDFToWordTool()
+        case .convertDocuments: ConvertDocumentsTool()
+        case .powerpointToPDF: PowerPointPDFTool()
+        case .excelToPDF: ExcelPDFTool()
         default:
             if let tool = ToolRegistry.byID[id] { ComingSoonView(tool: tool) }
         }
@@ -331,6 +335,19 @@ private struct RedactPDFTool: View {
             }
             Text(message).foregroundStyle(.secondary)
         }
+        .onAppear {
+            guard DemoSession.enabled, DemoSession.take(.redactPDF), let file = DemoSession.files[.redactPDF]?.first else { return }
+            url = file
+            word = "secret"
+            running = true
+            Task {
+                do {
+                    let made = try PDFJobs.redact(url: file, word: "secret", extra: [:]) { _ in }
+                    message = "Saved \(made.first?.lastPathComponent ?? "")"
+                } catch { message = error.localizedDescription }
+                running = false
+            }
+        }
     }
 }
 
@@ -362,7 +379,7 @@ private struct ScanTool: View {
 private struct WordPDFTool: View {
     var body: some View {
         FileJobView(tool: .wordToPDF, types: [UTType(filenameExtension: "docx") ?? .data, .rtf, .plainText, .html], prompt: "Drop a Word, RTF, HTML, or text file", actionTitle: "Make PDF", multiple: false) {
-            Text("Word files keep their paragraphs. Complex layouts are simplified.")
+            Text("Drawn with Core Text into a PDF. Complex Word layouts are simplified. Nothing is sent off this Mac.")
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
         } perform: { urls, _ in
@@ -396,6 +413,21 @@ private struct MarkdownPDFTool: View {
             }
             Text(message).foregroundStyle(.secondary)
         }
+        .onAppear {
+            guard DemoSession.enabled, DemoSession.take(.markdownToPDF) else { return }
+            let draft = model.draft(for: .markdownToPDF)
+            guard !draft.isEmpty else { return }
+            Task {
+                do {
+                    let folder = try Outputs.directory(in: .downloadsDirectory, subfolder: "Satchel")
+                    let stub = folder.appendingPathComponent("notes.md")
+                    let output = try await PDFJobs.markdown(draft, nextTo: stub)
+                    message = "Saved \(output.lastPathComponent) in Downloads/Satchel"
+                } catch {
+                    message = error.localizedDescription
+                }
+            }
+        }
     }
 }
 
@@ -410,7 +442,7 @@ private struct WebPDFTool: View {
             DropZone(prompt: "Or drop an HTML file", types: [.html], multiple: false) { urls in
                 if let url = urls.first { model.loadFile(url) }
             }
-            HiddenWeb(webView: model.webView)
+            WebPreview(model: model)
                 .frame(height: 220)
                 .clipShape(RoundedRectangle(cornerRadius: 12))
             HStack {
@@ -440,6 +472,19 @@ private struct WebPDFTool: View {
     }
 }
 
+private struct WebPreview: View {
+    @Environment(\.satchelSnapshot) private var snapshot
+    let model: WebPDFModel
+
+    var body: some View {
+        if snapshot {
+            Color(nsColor: .textBackgroundColor)
+        } else {
+            HiddenWeb(webView: model.webView)
+        }
+    }
+}
+
 private struct HiddenWeb: NSViewRepresentable {
     let webView: WKWebView
     func makeNSView(context: Context) -> WKWebView { webView }
@@ -447,15 +492,18 @@ private struct HiddenWeb: NSViewRepresentable {
 }
 
 final class WebPDFModel: NSObject, ObservableObject, WKNavigationDelegate {
-    let webView: WKWebView
     @Published var busy = false
     private var continuation: CheckedContinuation<Data, Error>?
+    private var storage: WKWebView?
+    private(set) var navigationFinished = false
 
-    override init() {
+    var webView: WKWebView {
+        if let storage { return storage }
         let configuration = WKWebViewConfiguration()
-        webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 900, height: 1200), configuration: configuration)
-        super.init()
-        webView.navigationDelegate = self
+        let view = WKWebView(frame: NSRect(x: 0, y: 0, width: 900, height: 1200), configuration: configuration)
+        view.navigationDelegate = self
+        storage = view
+        return view
     }
 
     func load(address: String) {
@@ -485,5 +533,7 @@ final class WebPDFModel: NSObject, ObservableObject, WKNavigationDelegate {
         }
     }
 
-    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {}
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        navigationFinished = true
+    }
 }

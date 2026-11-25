@@ -39,6 +39,10 @@ struct VideoToolScreen: View {
             ExtractFramesTool()
         case .videoToGIF:
             GIFTool()
+        case .downloadVideo:
+            DownloadVideoTool()
+        case .burnSubtitles:
+            BurnSubtitlesTool()
         default:
             if let tool = ToolRegistry.byID[id] { ComingSoonView(tool: tool) }
         }
@@ -58,6 +62,8 @@ struct AudioToolScreen: View {
             ExtractAudioTool()
         case .convertAudio:
             ConvertAudioTool()
+        case .cleanAudio:
+            CleanAudioTool()
         default:
             if let tool = ToolRegistry.byID[id] { ComingSoonView(tool: tool) }
         }
@@ -536,13 +542,5 @@ private struct RecordAudioTool: View {
 }
 
 func outputList(_ urls: [URL]) -> some View {
-    VStack(alignment: .leading, spacing: 6) {
-        ForEach(urls, id: \.path) { url in
-            HStack {
-                Text(url.lastPathComponent).lineLimit(1)
-                Spacer()
-                Button("Reveal in Finder") { Outputs.reveal(url) }
-            }
-        }
-    }
+    ResultTray(urls: urls)
 }

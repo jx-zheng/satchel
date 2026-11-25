@@ -1,0 +1,232 @@
+name: macOS
+
+on:
+  pull_request:
+    paths:
+      - "Satchel/**"
+      - "SatchelCore/**"
+      - "project.yml"
+      - "scripts/**"
+      - "ci/**"
+      - ".github/workflows/macos.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 80
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Snapshot the previous design
+        timeout-minutes: 15
+        run: |
+          set -euo pipefail
+          cp ci/BeforeSnapshot.swift /tmp/BeforeSnapshot.swift
+          git fetch --depth=1 origin b154b93f62fd0f8efd5d1aa5ddf0bffeb1c9f773
+          rm -rf Satchel SatchelCore
+          git checkout b154b93f62fd0f8efd5d1aa5ddf0bffeb1c9f773 -- Satchel SatchelCore project.yml
+          cp /tmp/BeforeSnapshot.swift Satchel/Snapshot.swift
+          xcodegen generate
+          xcodebuild -project Satchel.xcodeproj -scheme Satchel -configuration Release -derivedDataPath "$RUNNER_TEMP/dd-before" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
+          APP="$(find "$RUNNER_TEMP/dd-before/Build/Products/Release" -name 'Satchel.app' -type d | head -1)"
+          test -n "$APP"
+          codesign --force --deep --sign - "$APP" || true
+          mkdir -p "$RUNNER_TEMP/before"
+          "$APP/Contents/MacOS/Satchel" --snapshot "$RUNNER_TEMP/before"
+          find "$RUNNER_TEMP/before" -name 'before-*.png' | sort
+      - name: Upload before snapshots
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: satchel-redesign-before
+          path: ${{ runner.temp }}/before
+          if-no-files-found: error
+      - name: Restore this branch
+        run: |
+          set -euo pipefail
+          rm -rf Satchel SatchelCore Satchel.xcodeproj
+          git checkout HEAD -- Satchel SatchelCore project.yml
+      - name: Generate project
+        run: xcodegen generate
+      - name: Build
+        run: >
+          xcodebuild
+          -project Satchel.xcodeproj
+          -scheme Satchel
+          -configuration Release
+          -derivedDataPath "$RUNNER_TEMP/dd"
+          CODE_SIGNING_ALLOWED=NO
+          CODE_SIGNING_REQUIRED=NO
+          build
+      - name: Record demo
+        timeout-minutes: 20
+        run: |
+          set -euo pipefail
+          APP="$(find "$RUNNER_TEMP/dd/Build/Products/Release" -name 'Satchel.app' -type d | head -1)"
+          test -n "$APP"
+          codesign --force --deep --sign - "$APP" || true
+          mkdir -p "$RUNNER_TEMP/demo"
+          rm -f "$RUNNER_TEMP/demo/ready" "$RUNNER_TEMP/demo/demo-span.txt"
+          # Hide the Dock and the desktop icons, then ask for a 1080p display when the tool exists.
+          defaults write com.apple.dock autohide -bool true
+          defaults write com.apple.dock autohide-delay -float 0
+          killall Dock >/dev/null 2>&1 || true
+          defaults write com.apple.finder CreateDesktop -bool false
+          killall Finder >/dev/null 2>&1 || true
+          if command -v displayplacer >/dev/null 2>&1; then
+            displayplacer "res:1920x1080" || true
+          fi
+          killall "Problem Reporter" >/dev/null 2>&1 || true
+          (
+            for _ in $(seq 1 60); do
+              killall "Problem Reporter" >/dev/null 2>&1 || true
+              sleep 2
+            done
+          ) &
+          sweeper=$!
+          open "$APP" --args --demo "$RUNNER_TEMP/demo" --demo-norecord
+          for _ in $(seq 1 90); do
+            [ -f "$RUNNER_TEMP/demo/ready" ] && break
+            sleep 1
+          done
+          # Start once the tour is ready, and stop when Satchel quits, so the file has no idle tail.
+          screencapture -v -V 95 "$RUNNER_TEMP/demo/raw.mov" &
+          cap=$!
+          seen=0
+          for _ in $(seq 1 150); do
+            if pgrep -x Satchel >/dev/null; then
+              seen=1
+            elif [ "$seen" = "1" ]; then
+              break
+            fi
+            sleep 1
+          done
+          sleep 1
+          kill -INT "$cap" >/dev/null 2>&1 || true
+          wait "$cap" || true
+          kill "$sweeper" >/dev/null 2>&1 || true
+          SPAN="$(tr -d '[:space:]' < "$RUNNER_TEMP/demo/demo-span.txt")"
+          "$APP/Contents/MacOS/Satchel" --trim-movie "$RUNNER_TEMP/demo/raw.mov" "$RUNNER_TEMP/demo/satchel-demo.mp4" "$SPAN"
+          find "$RUNNER_TEMP/demo" -maxdepth 1 -type f -exec ls -lh {} \;
+          test -s "$RUNNER_TEMP/demo/satchel-demo.mp4"
+          bytes=$(stat -f%z "$RUNNER_TEMP/demo/satchel-demo.mp4")
+          echo "demo bytes=$bytes"
+          test "$bytes" -ge 1000000
+          python3 ci/check_demo.py "$RUNNER_TEMP/demo/demo-span.txt"
+      - name: Snapshot
+        timeout-minutes: 25
+        run: |
+          set -euo pipefail
+          APP="$(find "$RUNNER_TEMP/dd/Build/Products/Release" -name 'Satchel.app' -type d | head -1)"
+          test -n "$APP"
+          codesign --force --deep --sign - "$APP" || true
+          mkdir -p "$RUNNER_TEMP/snap"
+          "$APP/Contents/MacOS/Satchel" --snapshot "$RUNNER_TEMP/snap"
+          find "$RUNNER_TEMP/snap" -name '*.png' | sort
+      - name: Self-test
+        id: verify
+        timeout-minutes: 25
+        run: |
+          set -euo pipefail
+          APP="$(find "$RUNNER_TEMP/dd/Build/Products/Release" -name 'Satchel.app' -type d | head -1)"
+          test -n "$APP"
+          mkdir -p "$RUNNER_TEMP/snap"
+          set +e
+          "$APP/Contents/MacOS/Satchel" --selftest "$RUNNER_TEMP/snap"
+          code=$?
+          set -e
+          if [ -f "$RUNNER_TEMP/snap/selftest.txt" ]; then
+            cat "$RUNNER_TEMP/snap/selftest.txt"
+          fi
+          echo "selftest=$code" >> "$GITHUB_OUTPUT"
+      - name: Performance
+        if: always()
+        timeout-minutes: 25
+        run: |
+          set -euo pipefail
+          APP="$(find "$RUNNER_TEMP/dd/Build/Products/Release" -name 'Satchel.app' -type d | head -1)"
+          test -n "$APP"
+          mkdir -p "$RUNNER_TEMP/snap"
+          rm -f "$RUNNER_TEMP/snap/leak.done" "$RUNNER_TEMP/snap/perf.json"
+          "$APP/Contents/MacOS/Satchel" --perf "$RUNNER_TEMP/snap" &
+          pid=$!
+          for _ in $(seq 1 600); do
+            if [ -f "$RUNNER_TEMP/snap/perf.json" ]; then
+              break
+            fi
+            sleep 1
+          done
+          leaks "$pid" -quiet > "$RUNNER_TEMP/snap/leaks.txt" || true
+          touch "$RUNNER_TEMP/snap/leak.done"
+          wait "$pid" || true
+          if [ -f "$RUNNER_TEMP/snap/perf.json" ]; then
+            cat "$RUNNER_TEMP/snap/perf.json"
+          fi
+          python3 ci/check_perf.py "$RUNNER_TEMP/snap/perf.json"
+      - name: Upload snapshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: satchel-snapshots
+          path: ${{ runner.temp }}/snap
+          if-no-files-found: error
+      - name: Upload tool screens
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: satchel-tool-screens
+          path: ${{ runner.temp }}/snap/tools
+          if-no-files-found: error
+      - name: Upload redesign after
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: satchel-redesign-after
+          path: ${{ runner.temp }}/snap/redesign
+          if-no-files-found: error
+      - name: Require self-test
+        if: always()
+        run: test "${{ steps.verify.outputs.selftest }}" = "0"
+      - name: Require no leaks
+        if: always()
+        run: |
+          set -euo pipefail
+          FILE="$RUNNER_TEMP/snap/leaks.txt"
+          test -f "$FILE"
+          if grep -E '^[1-9][0-9]* leak' "$FILE"; then
+            echo "leaks reported allocated memory that was not freed"
+            exit 1
+          fi
+      - name: Upload demo
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: satchel-demo
+          path: ${{ runner.temp }}/demo
+          if-no-files-found: error
+
+  redesign:
+    needs: macos
+    if: success()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: satchel-redesign-before
+          path: redesign
+      - uses: actions/download-artifact@v4
+        with:
+          name: satchel-redesign-after
+          path: redesign
+      - name: Upload redesign comparison
+        uses: actions/upload-artifact@v4
+        with:
+          name: satchel-redesign
+          path: redesign
+          if-no-files-found: error

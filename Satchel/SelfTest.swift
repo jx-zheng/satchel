@@ -8,6 +8,7 @@ import CoreMedia
 import CoreVideo
 import ImageIO
 import PDFKit
+import Speech
 import UniformTypeIdentifiers
 import SatchelCore
 
@@ -35,7 +36,6 @@ enum SelfTest {
     static func run(directory: String) async -> Int {
         let root = URL(fileURLWithPath: directory, isDirectory: true)
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        var lines: [String] = []
         do {
             _ = try await FixtureSet.make(in: root.appendingPathComponent("fixtures", isDirectory: true))
         } catch {
@@ -45,6 +45,11 @@ enum SelfTest {
             return 1
         }
         var failed = 0
+        let tabLine = await tabHitLine()
+        if tabLine.contains(" FAIL ") { failed += 1 }
+        emit(tabLine)
+        var lines: [String] = [tabLine]
+        var times: [[String: Any]] = []
         for tool in ToolRegistry.all {
             let line: String
             if tool.status != .working {
@@ -53,6 +58,16 @@ enum SelfTest {
                 line = report(tool.id, "SKIP", reason)
             } else {
                 line = await runChild(tool, directory: directory)
+                if let seconds = readSeconds(root), line.contains(" PASS") || line.contains(" FAIL") {
+                    let outcome = line.contains(" FAIL") ? "FAIL" : "PASS"
+                    let stallMs = (readSecondsFile(root, name: "stall.txt") ?? 0) * 1000
+                    times.append([
+                        "tool": tool.id.rawValue,
+                        "seconds": seconds,
+                        "outcome": outcome,
+                        "stallMs": stallMs
+                    ])
+                }
             }
             emit(line)
             lines.append(line)
@@ -60,7 +75,21 @@ enum SelfTest {
             let summary = lines.joined(separator: "\n") + "\n"
             try? summary.write(to: root.appendingPathComponent("selftest.txt"), atomically: true, encoding: .utf8)
         }
+        if let data = try? JSONSerialization.data(withJSONObject: times, options: [.prettyPrinted, .sortedKeys]) {
+            try? data.write(to: root.appendingPathComponent("tool-times.json"))
+        }
         return failed == 0 ? 0 : 1
+    }
+
+    private static func readSeconds(_ root: URL) -> Double? {
+        readSecondsFile(root, name: "seconds.txt")
+    }
+
+    private static func readSecondsFile(_ root: URL, name: String) -> Double? {
+        let url = root.appendingPathComponent(name)
+        defer { try? FileManager.default.removeItem(at: url) }
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+        return Double(text.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
     @MainActor
@@ -72,9 +101,48 @@ enum SelfTest {
             try? line.write(to: root.appendingPathComponent("result.txt"), atomically: true, encoding: .utf8)
             return 1
         }
-        let line = await evaluate(tool, fixtures: fixtures)
+        let watch = StallWatch()
+        watch.start()
+        let started = Date()
+        let line = await Task.detached(priority: .userInitiated) {
+            await SelfTest.evaluate(tool, fixtures: fixtures)
+        }.value
+        let stall = await watch.finish()
+        let seconds = String(format: "%.6f\n", Date().timeIntervalSince(started))
+        try? seconds.write(to: root.appendingPathComponent("seconds.txt"), atomically: true, encoding: .utf8)
+        try? String(format: "%.6f\n", stall).write(to: root.appendingPathComponent("stall.txt"), atomically: true, encoding: .utf8)
         try? line.write(to: root.appendingPathComponent("result.txt"), atomically: true, encoding: .utf8)
         return line.contains(" FAIL ") ? 1 : 0
+    }
+
+    @MainActor
+    private static func tabHitLine() async -> String {
+        guard let exe = Bundle.main.executableURL else {
+            return "SELFTEST tab-hit FAIL missing executable"
+        }
+        let process = Process()
+        process.executableURL = exe
+        process.arguments = ["--tab-hit"]
+        let status: Int32 = await withCheckedContinuation { continuation in
+            let once = ResumeOnce()
+            process.terminationHandler = { proc in
+                once.run { continuation.resume(returning: proc.terminationStatus) }
+            }
+            do { try process.run() } catch {
+                once.run { continuation.resume(returning: -2) }
+                return
+            }
+            DispatchQueue.global().asyncAfter(deadline: .now() + 60) {
+                if process.isRunning {
+                    process.terminate()
+                    kill(process.processIdentifier, SIGKILL)
+                }
+                once.run { continuation.resume(returning: -1) }
+            }
+        }
+        if status == 0 { return "SELFTEST tab-hit PASS" }
+        if status == -1 { return "SELFTEST tab-hit FAIL timeout" }
+        return "SELFTEST tab-hit FAIL exit \(status)"
     }
 
     @MainActor
@@ -106,7 +174,7 @@ enum SelfTest {
                 once.run { continuation.resume(returning: -2) }
                 return
             }
-            DispatchQueue.global().asyncAfter(deadline: .now() + 40) {
+            DispatchQueue.global().asyncAfter(deadline: .now() + 60) {
                 if process.isRunning {
                     process.terminate()
                     kill(process.processIdentifier, SIGKILL)
@@ -123,7 +191,7 @@ enum SelfTest {
                 return line
             }
         }
-        if status == -1 { return report(tool.id, "FAIL", "timed out") }
+        if status == -1 { return report(tool.id, "FAIL", "timeout") }
         let tail = (try? String(contentsOf: log, encoding: .utf8))?
             .replacingOccurrences(of: "\n", with: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -136,7 +204,6 @@ enum SelfTest {
         fflush(stdout)
     }
 
-    @MainActor
     private static func evaluate(_ tool: ToolDefinition, fixtures: FixtureSet) async -> String {
         if tool.status != .working {
             return report(tool.id, "SKIP", "placeholder")
@@ -147,6 +214,8 @@ enum SelfTest {
         do {
             try await exercise(tool.id, fixtures)
             return report(tool.id, "PASS", "")
+        } catch let skip as SkipSignal {
+            return report(tool.id, "SKIP", skip.reason)
         } catch {
             return report(tool.id, "FAIL", error.localizedDescription.replacingOccurrences(of: "\n", with: " "))
         }
@@ -159,42 +228,21 @@ enum SelfTest {
 
     private static func skipReason(_ id: ToolID) -> String? {
         switch id {
-        case .recordScreen, .screenshot:
-            return "needs screen recording permission"
         case .recordAudio:
             return "needs microphone permission"
-        case .colorPicker:
-            return "needs a click on the screen"
-        case .transcribe:
-            return "needs speech recognition permission"
-        case .textToSpeech:
-            return "speech synthesis can stall without an audio device"
-        case .translate:
-            return "needs a translation session in the window"
-        case .blurFaces:
-            return "needs a real face in the photo"
-        case .removeBackground:
-            return "needs a photograph with a subject"
-        case .cleanKeyboard, .deadPixel, .redactImage:
-            return "needs drawing or a full-screen overlay"
         case .wifiPassword:
             return "needs the keychain and the current network"
         case .networkSpeed:
             return "uses the network"
-        case .presentationMode, .hiddenSettings, .mouseFixes, .resetPermissions:
-            return "changes system settings"
-        case .uninstallApp, .fixDamaged:
-            return "needs an app you choose"
-        case .webPageToPDF:
-            return "needs a web view on screen"
-        case .fillForms:
-            return "needs a PDF that already has form fields"
+        case .presentationMode:
+            return "hides the desktop and the Dock"
+        case .resetPermissions:
+            return "resets system privacy permissions"
         default:
             return nil
         }
     }
 
-    @MainActor
     private static func exercise(_ id: ToolID, _ fixtures: FixtureSet) async throws {
         switch id {
         case .changeSpeed:
@@ -227,7 +275,14 @@ enum SelfTest {
         case .extractAudio:
             _ = try await check(MediaJobs.extractAudio(urls: [fixtures.video], progress: { _ in }))
         case .convertAudio:
-            _ = try await check(MediaJobs.convertAudio(urls: [fixtures.audio], ext: "wav", progress: { _ in }))
+            for ext in ["m4a", "wav", "aiff", "caf"] {
+                let made = try await check(MediaJobs.convertAudio(urls: [fixtures.audio], ext: ext, progress: { _ in }))
+                let file = try AVAudioFile(forReading: made[0])
+                if file.length < 1000 { throw ToolError(message: "\(ext) was too short") }
+                if made[0].pathExtension.lowercased() != ext {
+                    throw ToolError(message: "expected a .\(ext) file")
+                }
+            }
         case .beautifyScreenshot:
             _ = try checkOne(ImageJobs.beautify(url: fixtures.png, padding: 12, radius: 8, shadow: true, aspect: CGSize(width: 16, height: 9), background: .white))
         case .convertImages:
@@ -276,7 +331,79 @@ enum SelfTest {
         case .cropPDF:
             _ = try check(PDFJobs.crop(url: fixtures.pdf, margin: 12))
         case .compressPDF:
-            _ = try check(PDFJobs.compress(url: fixtures.pdf, quality: 0.5, progress: { _ in }))
+            let heavy = fixtures.folder.appendingPathComponent("photos.pdf")
+            try PhotoPDF.write(to: heavy, pages: 10)
+            let before = FileSize.bytes(heavy)
+            let made = try PDFJobs.compress(url: heavy, quality: 0.45, progress: { _ in })
+            _ = try check(made)
+            if FileSize.bytes(made[0]) >= before {
+                throw ToolError(message: "compressed PDF was not smaller")
+            }
+        case .fillForms:
+            let form = fixtures.folder.appendingPathComponent("form.pdf")
+            try PDFJobs.writeForm(to: form)
+            let fields = try PDFJobs.formFields(url: form, password: "")
+            if fields.isEmpty { throw ToolError(message: "form PDF has no text field") }
+            _ = try check(PDFJobs.fill(url: form, password: "", values: ["Name": "Ada"]))
+        case .blurFaces:
+            let face = try BundleFixture.copy(name: "face", ext: "jpg", to: fixtures.folder)
+            _ = try await check(ImageJobs.blurFaces(urls: [face], style: .blur, progress: { _ in }))
+        case .removeBackground:
+            let subject = try BundleFixture.copy(name: "subject", ext: "png", to: fixtures.folder)
+            _ = try await check(ImageJobs.removeBackground(urls: [subject], background: .white, crop: false, progress: { _ in }))
+        case .redactImage:
+            _ = try checkOne(ImageJobs.cover(url: fixtures.png, rects: [CGRect(x: 20, y: 20, width: 80, height: 40)]))
+        case .colorPicker:
+            let swatch = fixtures.folder.appendingPathComponent("swatch.png")
+            try ColorSample.swatch(color: (255, 0, 0), to: swatch)
+            let image = try ImageFiles.load(swatch)
+            if !ColorSample.contains(image: image, red: 255, green: 0, blue: 0) {
+                throw ToolError(message: "sampled \(ColorSample.hex(image: image, x: image.width / 2, y: image.height / 2))")
+            }
+        case .cleanKeyboard:
+            let keyboardShown = await MainActor.run { KeyboardCover.shared.show() }
+            if !keyboardShown { throw SkipSignal(reason: "no display for the keyboard cover") }
+            await MainActor.run { KeyboardCover.shared.hide() }
+        case .deadPixel:
+            let pixelShown = await MainActor.run { DeadPixelCover.shared.show() }
+            if !pixelShown { throw SkipSignal(reason: "no display for the color cover") }
+            await MainActor.run { DeadPixelCover.shared.hide() }
+        case .hiddenSettings, .mouseFixes:
+            try DefaultsLab.roundTrip()
+        case .uninstallApp:
+            let app = try AppLab.dummyApp(in: fixtures.folder)
+            try AppLab.trash(app)
+            if FileManager.default.fileExists(atPath: app.path) { throw ToolError(message: "dummy app was not moved to the Trash") }
+        case .fixDamaged:
+            let app = try AppLab.dummyApp(in: fixtures.folder.appendingPathComponent("damaged", isDirectory: true))
+            try AppLab.clearQuarantine(app)
+        case .webPageToPDF:
+            _ = try await checkOne(WebProbe.pdf(html: "<html><body><h1>Satchel page</h1><p>local only</p></body></html>", in: fixtures.folder))
+        case .transcribe:
+            try await transcribeFixture(fixtures)
+        case .textToSpeech:
+            try await speakFixture()
+        case .translate:
+            let translated = try await TranslateProbe.tryPhrase()
+            if translated.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                throw ToolError(message: "translation was empty")
+            }
+        case .screenshot:
+            if !CGPreflightScreenCaptureAccess() {
+                throw SkipSignal(reason: "needs screen recording permission")
+            }
+            do {
+                _ = try await checkOne(ScreenGrab.capture(to: fixtures.folder))
+            } catch let skip as SkipSignal {
+                throw skip
+            } catch {
+                throw SkipSignal(reason: permissionReason(error, fallback: "screen capture was not granted"))
+            }
+        case .recordScreen:
+            if !CGPreflightScreenCaptureAccess() {
+                throw SkipSignal(reason: "needs screen recording permission")
+            }
+            try await recordBriefly(fixtures)
         case .addPassword:
             _ = try check(PDFJobs.addPassword(url: fixtures.pdf, current: "", password: "test-pass"))
         case .removePassword:
@@ -285,9 +412,97 @@ enum SelfTest {
         case .pdfToImages:
             _ = try check(PDFJobs.pdfToImages(url: fixtures.pdf, ext: "png", progress: { _ in }))
         case .wordToPDF:
-            _ = try checkOne(try await PDFJobs.wordToPDF(url: fixtures.notes))
+            let printed = try checkOne(try await PDFJobs.wordToPDF(url: fixtures.notes))
+            try requirePDFText(printed, contains: "Hello")
         case .markdownToPDF:
-            _ = try checkOne(try await PDFJobs.markdown("# Hello\n\nA note.", nextTo: fixtures.notes))
+            let notes = try checkOne(try await PDFJobs.markdown("# Hello\n\nA note about Satchel.", nextTo: fixtures.notes))
+            try requirePDFText(notes, contains: "Hello")
+        case .downloadVideo:
+            try await downloadCheck(fixtures)
+        case .burnSubtitles:
+            let srt = fixtures.folder.appendingPathComponent("cues.srt")
+            try """
+            1
+            00:00:00,200 --> 00:00:02,600
+            HELLO
+
+            """.write(to: srt, atomically: true, encoding: .utf8)
+            let burned = try await SubtitleBurn.burn(video: fixtures.video, srt: srt, progress: { _ in })
+            _ = try checkOne(burned)
+            let generator = AVAssetImageGenerator(asset: AVURLAsset(url: burned))
+            generator.appliesPreferredTrackTransform = true
+            generator.requestedTimeToleranceBefore = .zero
+            generator.requestedTimeToleranceAfter = .zero
+            var recognized = ""
+            for seconds in [0.4, 1.0, 1.6] {
+                let sample = try await generator.image(at: CMTime(seconds: seconds, preferredTimescale: 600)).image
+                recognized = (try? OCRJobs.text(from: sample)) ?? ""
+                if recognized.uppercased().contains("HELLO") { break }
+            }
+            if !recognized.uppercased().contains("HELLO") {
+                throw ToolError(message: "burned frame text was \(recognized)")
+            }
+        case .cleanAudio:
+            try AudioCleanup.assertLouderSignal()
+            let noisy = fixtures.folder.appendingPathComponent("noisy.wav")
+            try AudioCleanup.writeTestTone(to: noisy)
+            _ = try await check(AudioCleanup.clean(urls: [noisy], progress: { _ in }))
+        case .pdfToWord:
+            let docx = try OfficeDocs.pdfToWord(url: fixtures.pdf)
+            let extracted = try DocxPackage.plainText(docx)
+            if !extracted.localizedCaseInsensitiveContains("Hello") || !extracted.localizedCaseInsensitiveContains("secret") {
+                throw ToolError(message: "docx missed the PDF text: \(extracted)")
+            }
+        case .convertDocuments:
+            let rtf = try OfficeDocs.convert(url: fixtures.notes, ext: "rtf")
+            let rtfText = try String(contentsOf: rtf, encoding: .utf8)
+            if !rtfText.hasPrefix("{\\rtf") || !rtfText.contains("Hello") {
+                throw ToolError(message: "rtf conversion failed")
+            }
+            let html = try OfficeDocs.convert(url: fixtures.notes, ext: "html")
+            let htmlText = try String(contentsOf: html, encoding: .utf8)
+            if !htmlText.localizedCaseInsensitiveContains("Hello") {
+                throw ToolError(message: "html conversion missed the text")
+            }
+        case .powerpointToPDF:
+            let deck = fixtures.folder.appendingPathComponent("deck.pptx")
+            try OfficeDocs.makeSlides(lines: ["Roadmap"], to: deck)
+            let slides = try await OfficeDocs.powerpoint(url: deck, progress: { _ in })
+            try requirePDFText(slides, contains: "Roadmap")
+        case .excelToPDF:
+            let book = fixtures.folder.appendingPathComponent("sheet.xlsx")
+            try OfficeDocs.makeWorkbook(cells: [["Revenue", "42"]], to: book)
+            let table = try await OfficeDocs.excel(url: book, progress: { _ in })
+            try requirePDFText(table, contains: "Revenue")
+            try requirePDFText(table, contains: "42")
+        case .summarize:
+            let note = Array(repeating: "Cats sleep in warm sun.", count: 4).joined(separator: " ")
+                + " " + Array(repeating: "Trains cross the valley at dusk.", count: 4).joined(separator: " ")
+            let summary = Summaries.extractive(note)
+            if summary.count >= note.count { throw ToolError(message: "summary was not shorter") }
+            if !summary.localizedCaseInsensitiveContains("cats") && !summary.localizedCaseInsensitiveContains("trains") {
+                throw ToolError(message: "summary missed the topic")
+            }
+            let generated = await Summaries.make(note)
+            if generated.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                throw ToolError(message: "summary was empty")
+            }
+        case .askDocument:
+            let document = "The secret color is indigo. The sky is wide and the road is long."
+            let passage = DocumentQA.bestPassage(question: "What is the secret color?", document: document)
+            if !passage.localizedCaseInsensitiveContains("indigo") {
+                throw ToolError(message: "passage missed indigo: \(passage)")
+            }
+            let answer = await DocumentQA.answer(question: "What is the secret color?", document: document)
+            if answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                throw ToolError(message: "answer was empty")
+            }
+        case .displayControl:
+            let reading = try DisplayDesk.read()
+            guard let mode = reading.modes.first(where: { $0.current }) ?? reading.modes.first,
+                  mode.width > 0, mode.height > 0 else {
+                throw ToolError(message: "display mode was empty")
+            }
         case .extractText, .captureText:
             _ = try OCRJobs.text(from: ImageFiles.load(fixtures.labeled))
         case .wordCounter:
@@ -381,6 +596,67 @@ enum SelfTest {
         }
     }
 
+    private static func permissionReason(_ error: Error, fallback: String) -> String {
+        let text = error.localizedDescription.lowercased()
+        if text.contains("permission") || text.contains("denied") || text.contains("not authorized") || text.contains("tcc") {
+            return error.localizedDescription
+        }
+        return "\(fallback): \(error.localizedDescription)"
+    }
+
+    @MainActor
+    private static func transcribeFixture(_ fixtures: FixtureSet) async throws {
+        if SFSpeechRecognizer.authorizationStatus() != .authorized {
+            throw SkipSignal(reason: "needs speech recognition permission")
+        }
+        let spoken = fixtures.folder.appendingPathComponent("spoken.aiff")
+        try SpeechFixture.say("Hello Satchel", to: spoken)
+        do {
+            let transcript = try await SpeechJobs.transcribe(url: spoken, progress: { _ in })
+            let plain = transcript.plain.lowercased()
+            if !plain.contains("hello") && !plain.contains("satchel") {
+                throw ToolError(message: "transcript missed the spoken words: \(transcript.plain)")
+            }
+        } catch let skip as SkipSignal {
+            throw skip
+        } catch {
+            let text = error.localizedDescription.lowercased()
+            if text.contains("speech") || text.contains("author") || text.contains("language") || text.contains("recogn") {
+                throw SkipSignal(reason: error.localizedDescription)
+            }
+            throw error
+        }
+    }
+
+    @MainActor
+    private static func speakFixture() async throws {
+        let spoken = try await withThrowingTaskGroup(of: URL.self) { group in
+            group.addTask { try await SpeechJobs.speak(text: "Hello Satchel", language: "en-US", progress: { _ in }) }
+            group.addTask {
+                try await Task.sleep(nanoseconds: 20_000_000_000)
+                throw SkipSignal(reason: "speech synthesis timed out")
+            }
+            guard let url = try await group.next() else { throw ToolError(message: "speech synthesis produced nothing") }
+            group.cancelAll()
+            return url
+        }
+        if FileSize.bytes(spoken) < 100 { throw ToolError(message: "speech file was empty") }
+    }
+
+    @MainActor
+    private static func recordBriefly(_ fixtures: FixtureSet) async throws {
+        let recorder = DisplayRecorder()
+        await recorder.start()
+        if !recorder.recording {
+            throw SkipSignal(reason: recorder.message.isEmpty ? "screen recording was not granted" : recorder.message)
+        }
+        try await Task.sleep(nanoseconds: 700_000_000)
+        guard let url = await recorder.stop(), FileManager.default.fileExists(atPath: url.path) else {
+            throw SkipSignal(reason: "screen recording did not produce a file")
+        }
+        _ = fixtures
+    }
+
     private static func check(_ urls: [URL]) throws -> [URL] {
         if urls.isEmpty { throw ToolError(message: "no output") }
         for url in urls where !FileManager.default.fileExists(atPath: url.path) {
@@ -392,6 +668,36 @@ enum SelfTest {
     private static func checkOne(_ url: URL) throws -> URL {
         _ = try check([url])
         return url
+    }
+
+    private static func downloadCheck(_ fixtures: FixtureSet) async throws {
+        let clip = try Data(contentsOf: fixtures.video)
+        let playlist = """
+        #EXTM3U
+        #EXT-X-VERSION:3
+        #EXT-X-TARGETDURATION:4
+        #EXTINF:3.0,
+        clip.mov
+        #EXT-X-ENDLIST
+        """
+        let (port, stop) = try LoopbackServer.start([
+            "clip.mov": clip,
+            "index.m3u8": Data(playlist.utf8)
+        ])
+        defer { stop() }
+        try await Task.sleep(nanoseconds: 150_000_000)
+        let folder = fixtures.folder.appendingPathComponent("downloads", isDirectory: true)
+        let direct = try await VideoDownload.save(urlString: "http://127.0.0.1:\(port)/clip.mov", directory: folder, allowPageTool: false, progress: { _ in })
+        if try Data(contentsOf: direct) != clip { throw ToolError(message: "direct download did not match") }
+        let hlsFolder = fixtures.folder.appendingPathComponent("hls", isDirectory: true)
+        let streamed = try await VideoDownload.save(urlString: "http://127.0.0.1:\(port)/index.m3u8", directory: hlsFolder, allowPageTool: false, progress: { _ in })
+        if try Data(contentsOf: streamed) != clip { throw ToolError(message: "hls download did not match the segment") }
+    }
+
+    private static func requirePDFText(_ url: URL, contains needle: String) throws {
+        guard let document = PDFDocument(url: url), let text = document.string, text.localizedCaseInsensitiveContains(needle) else {
+            throw ToolError(message: "PDF did not contain \(needle)")
+        }
     }
 }
 

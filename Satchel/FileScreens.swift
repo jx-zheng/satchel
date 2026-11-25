@@ -39,6 +39,11 @@ private struct QRTool: View {
             if !read.isEmpty { Text(read).textSelection(.enabled) }
             Text(message).foregroundStyle(.secondary)
         }
+        .onAppear {
+            guard DemoSession.enabled, DemoSession.take(.qrCode) else { return }
+            text = "https://example.com"
+            generate()
+        }
     }
 
     private func generate() {
@@ -118,6 +123,11 @@ private struct RenameTool: View {
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
             Text(message).foregroundStyle(.secondary)
+        }
+        .onAppear {
+            guard DemoSession.enabled, DemoSession.take(.batchRename), let file = DemoSession.files[.batchRename]?.first else { return }
+            urls = [file]
+            prefix = "satchel-"
         }
     }
 

@@ -2,7 +2,13 @@
 
 A native macOS app that keeps a large set of small tools in one window. Files stay on the Mac: there is no account and no upload step.
 
-Satchel is an independent app. Its name, icon, and copy are its own.
+Satchel is an independent app. Its name, copy, and icon are its own. The Dock icon is a teal kit bag — an open tool bag with a wrench and a pencil — drawn by `scripts/make_app_icon.py` (concept B). Pillow and numpy are required to redraw it:
+
+```bash
+python3 scripts/make_app_icon.py --concept B --iconset Satchel/Assets.xcassets/AppIcon.appiconset
+```
+
+The 16 and 32 point slots are drawn on a pixel grid. Larger slots come from a supersampled master.
 
 ## Layout
 
@@ -10,7 +16,7 @@ Satchel is an independent app. Its name, icon, and copy are its own.
 - `Satchel/` is the SwiftUI app (macOS 15 or later).
 - `project.yml` is the XcodeGen spec. The Xcode project is generated and is not committed.
 - `scripts/install.sh` builds a Release app, re-signs it, and replaces `~/Applications/Satchel.app`.
-- `scripts/generate_icon.py` redraws the original app icon.
+- `scripts/make_app_icon.py` draws the app icon.
 
 ## Core tests
 
