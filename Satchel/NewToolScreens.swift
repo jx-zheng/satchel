@@ -5,6 +5,7 @@ import SatchelCore
 
 struct DownloadVideoTool: View {
     @Environment(\.satchelSnapshot) private var snapshot
+    @StateObject private var permission = PermissionCoordinator(tool: .downloadVideo)
     @State private var link = ""
     @State private var allowPageTool = true
     @State private var running = false
@@ -33,6 +34,7 @@ struct DownloadVideoTool: View {
             PrimaryButton(title: running ? "Downloading…" : "Download", enabled: link.contains("://") && !running) {
                 run()
             }
+            PermissionBannerSlot(coordinator: permission)
             if running {
                 ProgressView(value: progress).progressViewStyle(.linear)
             }
@@ -67,17 +69,24 @@ struct DownloadVideoTool: View {
         progress = 0
         let current = link
         let pages = allowPageTool
+        let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
         Task {
             do {
                 let folder = try Outputs.directory(in: .downloadsDirectory, subfolder: "Satchel")
                 let saved = try await VideoDownload.save(urlString: current, directory: folder, allowPageTool: pages) { value in
                     progress = value
                 }
+                permission.clear()
                 output = saved
                 message = "Saved \(saved.lastPathComponent)."
             } catch {
-                failed = true
-                message = error.localizedDescription
+                if permission.handleError(error, targetURL: downloads, retry: { run() }) {
+                    failed = false
+                    message = ""
+                } else {
+                    failed = true
+                    message = error.localizedDescription
+                }
             }
             running = false
         }

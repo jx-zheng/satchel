@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import SatchelCore
 
 enum Palette {
     /// Quiet indigo, not the system-blue used by the earlier layout.
@@ -50,6 +51,10 @@ private struct SampleResultKey: EnvironmentKey {
     static let defaultValue = false
 }
 
+private struct SimulatedPermissionDeniedKey: EnvironmentKey {
+    static let defaultValue: PermissionKind? = nil
+}
+
 extension EnvironmentValues {
     var satchelSnapshot: Bool {
         get { self[SnapshotFlagKey.self] }
@@ -59,6 +64,11 @@ extension EnvironmentValues {
     var satchelSampleResult: Bool {
         get { self[SampleResultKey.self] }
         set { self[SampleResultKey.self] = newValue }
+    }
+
+    var satchelSimulatedPermissionDenied: PermissionKind? {
+        get { self[SimulatedPermissionDeniedKey.self] }
+        set { self[SimulatedPermissionDeniedKey.self] = newValue }
     }
 }
 

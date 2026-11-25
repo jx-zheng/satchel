@@ -48,7 +48,10 @@ enum SelfTest {
         let tabLine = await tabHitLine()
         if tabLine.contains(" FAIL ") { failed += 1 }
         emit(tabLine)
-        var lines: [String] = [tabLine]
+        let permLine = await permissionGateLine()
+        if permLine.contains(" FAIL ") { failed += 1 }
+        emit(permLine)
+        var lines: [String] = [tabLine, permLine]
         var times: [[String: Any]] = []
         for tool in ToolRegistry.all {
             let line: String
@@ -143,6 +146,36 @@ enum SelfTest {
         if status == 0 { return "SELFTEST tab-hit PASS" }
         if status == -1 { return "SELFTEST tab-hit FAIL timeout" }
         return "SELFTEST tab-hit FAIL exit \(status)"
+    }
+
+    @MainActor
+    private static func permissionGateLine() async -> String {
+        guard let exe = Bundle.main.executableURL else {
+            return "SELFTEST permission-gate FAIL missing executable"
+        }
+        let process = Process()
+        process.executableURL = exe
+        process.arguments = ["--permission-gate"]
+        let status: Int32 = await withCheckedContinuation { continuation in
+            let once = ResumeOnce()
+            process.terminationHandler = { proc in
+                once.run { continuation.resume(returning: proc.terminationStatus) }
+            }
+            do { try process.run() } catch {
+                once.run { continuation.resume(returning: -2) }
+                return
+            }
+            DispatchQueue.global().asyncAfter(deadline: .now() + 60) {
+                if process.isRunning {
+                    process.terminate()
+                    kill(process.processIdentifier, SIGKILL)
+                }
+                once.run { continuation.resume(returning: -1) }
+            }
+        }
+        if status == 0 { return "SELFTEST permission-gate PASS" }
+        if status == -1 { return "SELFTEST permission-gate FAIL timeout" }
+        return "SELFTEST permission-gate FAIL exit \(status)"
     }
 
     @MainActor

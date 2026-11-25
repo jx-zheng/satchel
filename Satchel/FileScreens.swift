@@ -21,6 +21,7 @@ struct FileToolScreen: View {
 }
 
 private struct QRTool: View {
+    @StateObject private var permission = PermissionCoordinator(tool: .qrCode)
     @State private var text = "https://"
     @State private var image: NSImage?
     @State private var read = ""
@@ -36,6 +37,7 @@ private struct QRTool: View {
             DropZone(prompt: "Or drop an image to read a code", types: MediaTypes.images, multiple: false) { urls in
                 if let url = urls.first { decode(url) }
             }
+            PermissionBannerSlot(coordinator: permission)
             if !read.isEmpty { Text(read).textSelection(.enabled) }
             Text(message).foregroundStyle(.secondary)
         }
@@ -60,13 +62,21 @@ private struct QRTool: View {
 
     private func save() {
         guard let image, let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return }
+        let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
         do {
             let folder = try Outputs.directory(in: .downloadsDirectory, subfolder: "Satchel")
             let url = folder.appendingPathComponent("QR-\(Int(Date().timeIntervalSince1970)).png")
             try ImageFiles.write(cg, to: url, type: .png, quality: nil)
+            permission.clear()
             message = "Saved \(url.lastPathComponent)"
             Outputs.reveal(url)
-        } catch { message = error.localizedDescription }
+        } catch {
+            if permission.handleError(error, targetURL: downloads, retry: { save() }) {
+                message = ""
+            } else {
+                message = error.localizedDescription
+            }
+        }
     }
 
     private func decode(_ url: URL) {
@@ -321,6 +331,7 @@ private struct ZipTool: View {
 }
 
 private struct OrganizeTool: View {
+    @StateObject private var permission = PermissionCoordinator(tool: .organizeDownloads)
     @State private var folder = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Downloads")
     @State private var moves: [PlannedMove] = []
     @State private var message = ""
@@ -330,6 +341,7 @@ private struct OrganizeTool: View {
             Text(folder.path).font(.system(size: 12)).textSelection(.enabled)
             PrimaryButton(title: "Preview Downloads", enabled: true) { preview() }
             Button("Choose another folder") { choose() }
+            PermissionBannerSlot(coordinator: permission)
             ForEach(moves, id: \.name) { move in
                 HStack {
                     Text(move.name).lineLimit(1)
@@ -354,17 +366,38 @@ private struct OrganizeTool: View {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
-        if panel.runModal() == .OK, let url = panel.url { folder = url }
+        if panel.runModal() == .OK, let url = panel.url {
+            folder = url
+            permission.clear()
+        }
     }
 
     private func preview() {
-        let entries = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles])) ?? []
-        let mapped = entries.map { url -> DownloadEntry in
-            let dir = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
-            return DownloadEntry(name: url.lastPathComponent, isDirectory: dir)
+        Task {
+            if let kind = PermissionClassifier.folderKind(for: folder) {
+                guard await permission.ensure(kind, retry: { preview() }) else {
+                    moves = []
+                    message = ""
+                    return
+                }
+            }
+            do {
+                let entries = try FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles])
+                let mapped = entries.map { url -> DownloadEntry in
+                    let dir = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+                    return DownloadEntry(name: url.lastPathComponent, isDirectory: dir)
+                }
+                moves = DownloadOrganizer.plan(mapped)
+                message = moves.isEmpty ? "Nothing to sort." : "\(moves.count) files would move."
+            } catch {
+                moves = []
+                if permission.handleError(error, targetURL: folder, retry: { preview() }) {
+                    message = ""
+                } else {
+                    message = error.localizedDescription
+                }
+            }
         }
-        moves = DownloadOrganizer.plan(mapped)
-        message = moves.isEmpty ? "Nothing to sort." : "\(moves.count) files would move."
     }
 
     private func apply() {
@@ -387,7 +420,11 @@ private struct OrganizeTool: View {
             moves = []
             SatchelLog.toolRun(id: ToolID.organizeDownloads.rawValue, inputs: moved, outcome: "ok", seconds: RunLog.stamp(start))
         } catch {
-            message = error.localizedDescription
+            if permission.handleError(error, targetURL: folder, retry: { apply() }) {
+                message = ""
+            } else {
+                message = error.localizedDescription
+            }
         }
     }
 }

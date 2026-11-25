@@ -72,5 +72,13 @@
 			</array>
 		</dict>
 	</array>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Satchel reads the current Wi-Fi network name so it can look up that network’s saved password. Your location is not stored or sent.</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Satchel uses Automation only when a tool needs to coordinate with Finder or another app on this Mac.</string>
+	<key>NSContactsUsageDescription</key>
+	<string>Satchel accesses Contacts only when a tool needs contact details you choose. Nothing leaves this Mac.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Satchel accesses Photos only when you choose pictures from your library. Photos stay on this Mac.</string>
 </dict>
 </plist>

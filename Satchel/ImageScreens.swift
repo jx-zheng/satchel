@@ -344,6 +344,7 @@ private struct ColorPickerTool: View {
 }
 
 private struct ScreenshotTool: View {
+    @StateObject private var permission = PermissionCoordinator(tool: .screenshot)
     @State private var message = ""
     var body: some View {
         ToolPage(tool: ToolRegistry.definition(.screenshot)) {
@@ -352,12 +353,18 @@ private struct ScreenshotTool: View {
             PrimaryButton(title: "Capture display", enabled: true) {
                 Task { await capture() }
             }
+            PermissionBannerSlot(coordinator: permission)
             Text(message)
         }
     }
 
     private func capture() async {
+        guard await permission.ensure(.screenRecording, retry: { Task { await capture() } }) else {
+            message = ""
+            return
+        }
         let start = Date()
+        let desktop = FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask).first
         do {
             let folder = try Outputs.directory(in: .desktopDirectory, subfolder: "Satchel")
             let url = try await ScreenGrab.capture(to: folder)
@@ -365,7 +372,11 @@ private struct ScreenshotTool: View {
             Outputs.reveal(url)
             SatchelLog.toolRun(id: ToolID.screenshot.rawValue, inputs: 1, outcome: "ok", seconds: RunLog.stamp(start))
         } catch {
-            message = error.localizedDescription
+            if permission.handleError(error, targetURL: desktop, retry: { Task { await capture() } }) {
+                message = ""
+            } else {
+                message = error.localizedDescription
+            }
             SatchelLog.toolRun(id: ToolID.screenshot.rawValue, inputs: 1, outcome: "failed", seconds: RunLog.stamp(start))
         }
     }

@@ -407,3 +407,78 @@ final class TextAndDevTests: XCTestCase {
         XCTAssertFalse(rendered.geohash.isEmpty)
     }
 }
+
+final class PermissionGateTests: XCTestCase {
+    func testEveryStatusForEveryPermissionKind() {
+        for kind in PermissionKind.allCases {
+            XCTAssertFalse(kind.displayName.isEmpty)
+            XCTAssertTrue(kind.settingsURLString.hasPrefix("x-apple.systempreferences:com.apple.preference.security?Privacy"))
+            XCTAssertNotNil(URL(string: kind.settingsURLString))
+
+            for status in PermissionStatus.allCases {
+                let action = PermissionGate.action(for: kind, status: status)
+                switch status {
+                case .authorized:
+                    XCTAssertEqual(action, .proceed, "authorized should proceed for \(kind)")
+                case .notDetermined:
+                    if kind.hasRequestAPI {
+                        XCTAssertEqual(
+                            action,
+                            .request(kind, autoRetryOnGrant: kind.supportsCallbackAutoRetry),
+                            "notDetermined should request for \(kind)"
+                        )
+                    } else {
+                        XCTAssertEqual(
+                            action,
+                            .showBanner(kind),
+                            "notDetermined without request API should show banner for \(kind)"
+                        )
+                    }
+                case .denied, .restricted:
+                    XCTAssertEqual(action, .showBanner(kind), "\(status) should show banner for \(kind)")
+                }
+            }
+
+            XCTAssertEqual(PermissionGate.actionAfterRequest(kind: kind, granted: true), .proceed)
+            XCTAssertEqual(PermissionGate.actionAfterRequest(kind: kind, granted: false), .showBanner(kind))
+        }
+    }
+
+    func testFullDiskAccessHasNoRequestAPI() {
+        XCTAssertFalse(PermissionKind.fullDiskAccess.hasRequestAPI)
+        XCTAssertEqual(PermissionGate.action(for: .fullDiskAccess, status: .notDetermined), .showBanner(.fullDiskAccess))
+        XCTAssertEqual(PermissionGate.action(for: .fullDiskAccess, status: .denied), .showBanner(.fullDiskAccess))
+        XCTAssertEqual(PermissionGate.action(for: .fullDiskAccess, status: .restricted), .showBanner(.fullDiskAccess))
+        XCTAssertEqual(PermissionGate.action(for: .fullDiskAccess, status: .authorized), .proceed)
+        XCTAssertTrue(PermissionKind.fullDiskAccess.settingsURLString.hasSuffix("Privacy_AllFiles"))
+    }
+
+    func testCallbackAutoRetryPermissions() {
+        XCTAssertTrue(PermissionKind.microphone.supportsCallbackAutoRetry)
+        XCTAssertTrue(PermissionKind.speechRecognition.supportsCallbackAutoRetry)
+        XCTAssertTrue(PermissionKind.location.supportsCallbackAutoRetry)
+        XCTAssertFalse(PermissionKind.screenRecording.supportsCallbackAutoRetry)
+        XCTAssertFalse(PermissionKind.accessibility.supportsCallbackAutoRetry)
+        XCTAssertFalse(PermissionKind.fullDiskAccess.supportsCallbackAutoRetry)
+    }
+
+    func testToolPermissionAuditCoversAllPermissionedTools() {
+        let permissioned = Set(ToolPermissionAudit.permissionedTools)
+        XCTAssertTrue(permissioned.contains(.recordScreen))
+        XCTAssertTrue(permissioned.contains(.screenshot))
+        XCTAssertTrue(permissioned.contains(.recordAudio))
+        XCTAssertTrue(permissioned.contains(.transcribe))
+        XCTAssertTrue(permissioned.contains(.wifiPassword))
+        XCTAssertTrue(permissioned.contains(.organizeDownloads))
+        XCTAssertTrue(permissioned.contains(.storageExplorer))
+        XCTAssertTrue(permissioned.contains(.uninstallApp))
+        for id in ToolID.allCases {
+            let reqs = ToolPermissionAudit.requirements(for: id)
+            XCTAssertEqual(ToolPermissionAudit.toolNeedsPermission(id), !reqs.isEmpty)
+            for req in reqs {
+                XCTAssertFalse(req.reason.isEmpty)
+                XCTAssertFalse(ToolPermissionAudit.reason(for: id, kind: req.kind).isEmpty)
+            }
+        }
+    }
+}

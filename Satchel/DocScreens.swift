@@ -391,6 +391,7 @@ private struct WordPDFTool: View {
 
 private struct MarkdownPDFTool: View {
     @EnvironmentObject private var model: AppModel
+    @StateObject private var permission = PermissionCoordinator(tool: .markdownToPDF)
     @State private var message = ""
     var body: some View {
         ToolPage(tool: ToolRegistry.definition(.markdownToPDF)) {
@@ -399,18 +400,9 @@ private struct MarkdownPDFTool: View {
                 .frame(minHeight: 220)
                 .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.secondary.opacity(0.3)))
             PrimaryButton(title: "Save PDF", enabled: !model.draft(for: .markdownToPDF).isEmpty) {
-                let draft = model.draft(for: .markdownToPDF)
-                Task {
-                    do {
-                        let start = Date()
-                        let folder = try Outputs.directory(in: .downloadsDirectory, subfolder: "Satchel")
-                        let stub = folder.appendingPathComponent("notes.md")
-                        let output = try await PDFJobs.markdown(draft, nextTo: stub)
-                        message = "Saved \(output.lastPathComponent) in Downloads/Satchel"
-                        SatchelLog.toolRun(id: ToolID.markdownToPDF.rawValue, inputs: 1, outcome: "ok", seconds: RunLog.stamp(start))
-                    } catch { message = error.localizedDescription }
-                }
+                save()
             }
+            PermissionBannerSlot(coordinator: permission)
             Text(message).foregroundStyle(.secondary)
         }
         .onAppear {
@@ -429,10 +421,33 @@ private struct MarkdownPDFTool: View {
             }
         }
     }
+
+    private func save() {
+        let draft = model.draft(for: .markdownToPDF)
+        let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+        Task {
+            do {
+                let start = Date()
+                let folder = try Outputs.directory(in: .downloadsDirectory, subfolder: "Satchel")
+                let stub = folder.appendingPathComponent("notes.md")
+                let output = try await PDFJobs.markdown(draft, nextTo: stub)
+                permission.clear()
+                message = "Saved \(output.lastPathComponent) in Downloads/Satchel"
+                SatchelLog.toolRun(id: ToolID.markdownToPDF.rawValue, inputs: 1, outcome: "ok", seconds: RunLog.stamp(start))
+            } catch {
+                if permission.handleError(error, targetURL: downloads, retry: { save() }) {
+                    message = ""
+                } else {
+                    message = error.localizedDescription
+                }
+            }
+        }
+    }
 }
 
 private struct WebPDFTool: View {
     @StateObject private var model = WebPDFModel()
+    @StateObject private var permission = PermissionCoordinator(tool: .webPageToPDF)
     @State private var address = "https://"
     @State private var message = ""
 
@@ -448,26 +463,37 @@ private struct WebPDFTool: View {
             HStack {
                 PrimaryButton(title: "Load", enabled: address.contains(".")) { model.load(address: address) }
                 PrimaryButton(title: model.busy ? "Saving…" : "Save PDF", enabled: !model.busy) {
-                    Task {
-                        do {
-                            let start = Date()
-                            let data = try await model.pdf()
-                            let folder = try Outputs.directory(in: .downloadsDirectory, subfolder: "Satchel")
-                            let url = folder.appendingPathComponent("Page-\(Int(Date().timeIntervalSince1970)).pdf")
-                            try data.write(to: url)
-                            message = "Saved \(url.lastPathComponent)"
-                            Outputs.reveal(url)
-                            SatchelLog.toolRun(id: ToolID.webPageToPDF.rawValue, inputs: 1, outcome: "ok", seconds: RunLog.stamp(start))
-                        } catch {
-                            message = error.localizedDescription
-                        }
-                    }
+                    savePDF()
                 }
             }
+            PermissionBannerSlot(coordinator: permission)
             Text("A web address is loaded so it can be printed. A local HTML file never leaves this Mac.")
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
             Text(message).foregroundStyle(.secondary)
+        }
+    }
+
+    private func savePDF() {
+        let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+        Task {
+            do {
+                let start = Date()
+                let data = try await model.pdf()
+                let folder = try Outputs.directory(in: .downloadsDirectory, subfolder: "Satchel")
+                let url = folder.appendingPathComponent("Page-\(Int(Date().timeIntervalSince1970)).pdf")
+                try data.write(to: url)
+                permission.clear()
+                message = "Saved \(url.lastPathComponent)"
+                Outputs.reveal(url)
+                SatchelLog.toolRun(id: ToolID.webPageToPDF.rawValue, inputs: 1, outcome: "ok", seconds: RunLog.stamp(start))
+            } catch {
+                if permission.handleError(error, targetURL: downloads, retry: { savePDF() }) {
+                    message = ""
+                } else {
+                    message = error.localizedDescription
+                }
+            }
         }
     }
 }

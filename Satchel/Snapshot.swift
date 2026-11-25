@@ -100,6 +100,31 @@ enum Snapshotter {
                     exit(1)
                 }
             }
+            let deniedCases: [(ToolID, PermissionKind)] = [
+                (.recordAudio, .microphone),
+                (.storageExplorer, .fullDiskAccess)
+            ]
+            for (id, kind) in deniedCases {
+                guard let tool = ToolRegistry.byID[id] else { continue }
+                model.openTool = id
+                model.category = tool.category
+                let toolView = ToolRouter(tool: tool)
+                    .environmentObject(model)
+                    .environment(\.colorScheme, scheme)
+                    .environment(\.satchelSnapshot, true)
+                    .environment(\.satchelSimulatedPermissionDenied, kind)
+                    .frame(width: 980, height: 820)
+                    .background(Color(nsColor: .windowBackgroundColor))
+                let url = folder.appendingPathComponent("permission-denied-\(id.rawValue)-\(schemeName).png")
+                fputs("snapshot \(url.lastPathComponent)\n", stderr)
+                fflush(stderr)
+                do {
+                    try render(toolView, appearance: appearance, to: url, settle: 0.04)
+                } catch {
+                    fputs("Snapshot \(url.lastPathComponent) failed: \(error)\n", stderr)
+                    exit(1)
+                }
+            }
             model.openTool = nil
         }
         exit(0)
