@@ -213,30 +213,25 @@ enum LaunchMeasurer {
 
 final class StallWatch {
     private(set) var maxGap = 0.0
-    private var running = false
-    private let queue = DispatchQueue(label: "satchel.stall")
+    private var timer: Timer?
+    private var last = Date()
 
     func start() {
-        running = true
-        queue.async { [weak self] in self?.ping() }
+        last = Date()
+        let timer = Timer(timeInterval: 0.02, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            let now = Date()
+            let gap = now.timeIntervalSince(self.last)
+            if gap > self.maxGap { self.maxGap = gap }
+            self.last = now
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
     }
 
     func stop() {
-        running = false
-    }
-
-    private func ping() {
-        guard running else { return }
-        let sent = Date()
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            let gap = Date().timeIntervalSince(sent)
-            if gap > self.maxGap { self.maxGap = gap }
-            guard self.running else { return }
-            self.queue.asyncAfter(deadline: .now() + 0.02) { [weak self] in
-                self?.ping()
-            }
-        }
+        timer?.invalidate()
+        timer = nil
     }
 }
 
