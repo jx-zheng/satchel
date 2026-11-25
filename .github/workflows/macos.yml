@@ -96,7 +96,7 @@ jobs:
             sleep 1
           done
           # Start once the tour is ready, and stop when Satchel quits, so the file has no idle tail.
-          screencapture -v -V 120 "$RUNNER_TEMP/demo/raw.mov" &
+          screencapture -v -V 95 "$RUNNER_TEMP/demo/raw.mov" &
           cap=$!
           seen=0
           for _ in $(seq 1 150); do
@@ -111,7 +111,8 @@ jobs:
           kill -INT "$cap" >/dev/null 2>&1 || true
           wait "$cap" || true
           kill "$sweeper" >/dev/null 2>&1 || true
-          avconvert --source "$RUNNER_TEMP/demo/raw.mov" --preset Preset1280x720 --output "$RUNNER_TEMP/demo/satchel-demo.mp4"
+          SPAN="$(tr -d '[:space:]' < "$RUNNER_TEMP/demo/demo-span.txt")"
+          "$APP/Contents/MacOS/Satchel" --trim-movie "$RUNNER_TEMP/demo/raw.mov" "$RUNNER_TEMP/demo/satchel-demo.mp4" "$SPAN"
           find "$RUNNER_TEMP/demo" -maxdepth 1 -type f -exec ls -lh {} \;
           test -s "$RUNNER_TEMP/demo/satchel-demo.mp4"
           bytes=$(stat -f%z "$RUNNER_TEMP/demo/satchel-demo.mp4")

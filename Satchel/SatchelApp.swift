@@ -1,11 +1,40 @@
 import AppKit
+import AVFoundation
+import CoreMedia
 import SwiftUI
 
 @main
 enum SatchelMain {
     static func main() {
         Launch.noteBoot()
-        if CommandLine.arguments.contains("--perf-samples"), let directory = CommandLine.arguments.last {
+        if CommandLine.arguments.contains("--trim-movie") {
+            let args = CommandLine.arguments
+            guard let index = args.firstIndex(of: "--trim-movie"), index + 3 < args.count else { exit(2) }
+            let input = args[index + 1]
+            let output = args[index + 2]
+            let seconds = Double(args[index + 3]) ?? 75
+            let app = NSApplication.shared
+            app.setActivationPolicy(.accessory)
+            Task {
+                let asset = AVURLAsset(url: URL(fileURLWithPath: input))
+                let range = CMTimeRange(start: .zero, duration: CMTime(seconds: seconds, preferredTimescale: 600))
+                do {
+                    try await MediaExport.export(
+                        asset: asset,
+                        output: URL(fileURLWithPath: output),
+                        fileType: .mp4,
+                        preset: AVAssetExportPreset1280x720,
+                        timeRange: range,
+                        progress: { _ in }
+                    )
+                    exit(0)
+                } catch {
+                    fputs("trim failed: \(error)\n", stderr)
+                    exit(1)
+                }
+            }
+            app.run()
+        } else if CommandLine.arguments.contains("--perf-samples"), let directory = CommandLine.arguments.last {
             let app = NSApplication.shared
             app.setActivationPolicy(.accessory)
             Task {
