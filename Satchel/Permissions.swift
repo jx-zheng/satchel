@@ -3,6 +3,7 @@ import ApplicationServices
 import AVFoundation
 import Contacts
 import CoreGraphics
+import CoreServices
 import CoreLocation
 import Darwin
 import Photos
@@ -361,7 +362,7 @@ enum PermissionProbe {
         let created = data.withUnsafeBytes { bytes -> OSErr in
             AECreateDesc(DescType(typeApplicationBundleID), bytes.baseAddress, bytes.count, &desc)
         }
-        guard created == noErr else { return .notDetermined }
+        guard created == 0 else { return .notDetermined }
         defer { AEDisposeDesc(&desc) }
         let result = AEDeterminePermissionToAttemptTarget(
             &desc,
@@ -370,7 +371,7 @@ enum PermissionProbe {
             Boolean(askUserIfNeeded ? 1 : 0)
         )
         switch result {
-        case noErr:
+        case 0:
             return .authorized
         case OSStatus(-1743): // errAEEventNotPermitted
             return .denied
