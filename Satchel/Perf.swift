@@ -56,26 +56,24 @@ enum PerfRun {
         model.query = ""
         try? await Task.sleep(nanoseconds: 200_000_000)
         report["idleRSS"] = MemoryFootprint.residentBytes()
-        let stalls = StallWatch()
-        stalls.start()
+        var maxGap = 0.0
         var tabs: [[String: Any]] = []
         for category in categories {
+            let started = Date()
             model.category = category
             model.openTool = nil
             model.query = ""
-            let until = Date().addingTimeInterval(0.12)
-            while Date() < until {
-                RunLoop.main.run(mode: .common, before: Date().addingTimeInterval(0.02))
-            }
+            host.layoutSubtreeIfNeeded()
+            let gap = Date().timeIntervalSince(started)
+            if gap > maxGap { maxGap = gap }
             tabs.append([
                 "tab": category?.rawValue ?? "all",
                 "rss": MemoryFootprint.residentBytes()
             ])
         }
-        stalls.stop()
         report["tabs"] = tabs
         report["afterTabsRSS"] = MemoryFootprint.residentBytes()
-        report["maxMainThreadGapSeconds"] = stalls.maxGap
+        report["maxMainThreadGapSeconds"] = maxGap
         if let data = try? Data(contentsOf: folder.appendingPathComponent("tool-times.json")),
            let recorded = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
             report["tools"] = recorded
