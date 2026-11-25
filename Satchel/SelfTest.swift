@@ -361,11 +361,13 @@ enum SelfTest {
                 throw ToolError(message: "sampled \(ColorSample.hex(image: image, x: image.width / 2, y: image.height / 2))")
             }
         case .cleanKeyboard:
-            if !KeyboardCover.shared.show() { throw SkipSignal(reason: "no display for the keyboard cover") }
-            KeyboardCover.shared.hide()
+            let keyboardShown = await MainActor.run { KeyboardCover.shared.show() }
+            if !keyboardShown { throw SkipSignal(reason: "no display for the keyboard cover") }
+            await MainActor.run { KeyboardCover.shared.hide() }
         case .deadPixel:
-            if !DeadPixelCover.shared.show() { throw SkipSignal(reason: "no display for the color cover") }
-            DeadPixelCover.shared.hide()
+            let pixelShown = await MainActor.run { DeadPixelCover.shared.show() }
+            if !pixelShown { throw SkipSignal(reason: "no display for the color cover") }
+            await MainActor.run { DeadPixelCover.shared.hide() }
         case .hiddenSettings, .mouseFixes:
             try DefaultsLab.roundTrip()
         case .uninstallApp:
