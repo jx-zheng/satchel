@@ -5,7 +5,15 @@ import SwiftUI
 enum SatchelMain {
     static func main() {
         Launch.noteBoot()
-        if CommandLine.arguments.contains("--cold-window") {
+        if CommandLine.arguments.contains("--perf-samples"), let directory = CommandLine.arguments.last {
+            let app = NSApplication.shared
+            app.setActivationPolicy(.accessory)
+            Task {
+                await PerfSamples.run(directory: directory)
+                exit(0)
+            }
+            app.run()
+        } else if CommandLine.arguments.contains("--cold-window") {
             ColdWindow.run()
         } else if CommandLine.arguments.contains("--tab-hit") {
             Task { @MainActor in

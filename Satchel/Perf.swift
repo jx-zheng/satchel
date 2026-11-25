@@ -47,6 +47,8 @@ enum PerfRun {
             model.category = category
             model.openTool = nil
             model.query = ""
+            host.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
             try? await Task.sleep(nanoseconds: 80_000_000)
         }
         model.category = nil
@@ -61,7 +63,10 @@ enum PerfRun {
             model.category = category
             model.openTool = nil
             model.query = ""
-            try? await Task.sleep(nanoseconds: 160_000_000)
+            let until = Date().addingTimeInterval(0.12)
+            while Date() < until {
+                RunLoop.main.run(mode: .common, before: Date().addingTimeInterval(0.02))
+            }
             tabs.append([
                 "tab": category?.rawValue ?? "all",
                 "rss": MemoryFootprint.residentBytes()
@@ -81,29 +86,19 @@ enum PerfRun {
         } else {
             report["fixtureError"] = "missing tool times"
         }
-        do {
-            let clip = folder.appendingPathComponent("perf-clip.mov")
-            try await PerfMedia.video(to: clip)
-            WorkRelease.drain()
-            _ = try await MediaJobs.compress(urls: [clip], quality: 0, progress: { _ in })
-            WorkRelease.drain()
-            let image = folder.appendingPathComponent("perf-photo.jpg")
-            try PerfMedia.photo(to: image, width: 4000, height: 3000)
-            WorkRelease.drain()
-            _ = try await ImageJobs.compress(urls: [image], quality: 0.6, progress: { _ in })
-            WorkRelease.drain()
-            let pdf = folder.appendingPathComponent("perf-pages.pdf")
-            try PhotoPDF.write(to: pdf, pages: 20, width: 900, height: 600)
-            WorkRelease.drain()
-            _ = try PDFJobs.compress(url: pdf, quality: 0.5, progress: { _ in })
-            WorkRelease.drain()
-            _ = try JSONFormat.pretty("{\"b\":1,\"a\":true}")
-            for url in [clip, image, pdf] {
-                try? FileManager.default.removeItem(at: url)
+        if let exe = Bundle.main.executableURL {
+            let child = Process()
+            child.executableURL = exe
+            child.arguments = ["--perf-samples", folder.path]
+            do {
+                try child.run()
+                child.waitUntilExit()
+                if child.terminationStatus != 0 {
+                    report["fixtureError"] = "sample tools exited \(child.terminationStatus)"
+                }
+            } catch {
+                report["fixtureError"] = error.localizedDescription
             }
-            WorkRelease.drain()
-        } catch {
-            report["fixtureError"] = error.localizedDescription
         }
         try? await Task.sleep(nanoseconds: 200_000_000)
         WorkRelease.drain()
@@ -242,9 +237,39 @@ final class StallWatch {
 
 enum MemoryFootprint {
     static func residentBytes() -> Int {
-        let result = Commands.run("/bin/ps", ["-o", "rss=", "-p", "\(ProcessInfo.processInfo.processIdentifier)"])
-        let kilobytes = Int(result.output.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
-        return kilobytes * 1024
+        var info = mach_task_basic_info()
+        var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size / MemoryLayout<integer_t>.size)
+        let status = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count)
+            }
+        }
+        if status == KERN_SUCCESS {
+            return Int(info.resident_size)
+        }
+        return 0
+    }
+}
+
+enum PerfSamples {
+    static func run(directory: String) async {
+        let folder = URL(fileURLWithPath: directory, isDirectory: true)
+        do {
+            let clip = folder.appendingPathComponent("perf-clip.mov")
+            try await PerfMedia.video(to: clip)
+            _ = try await MediaJobs.compress(urls: [clip], quality: 0, progress: { _ in })
+            let image = folder.appendingPathComponent("perf-photo.jpg")
+            try PerfMedia.photo(to: image, width: 4000, height: 3000)
+            _ = try await ImageJobs.compress(urls: [image], quality: 0.6, progress: { _ in })
+            let pdf = folder.appendingPathComponent("perf-pages.pdf")
+            try PhotoPDF.write(to: pdf, pages: 20, width: 900, height: 600)
+            _ = try PDFJobs.compress(url: pdf, quality: 0.5, progress: { _ in })
+            _ = try JSONFormat.pretty("{\"b\":1,\"a\":true}")
+            exit(0)
+        } catch {
+            fputs("perf samples: \(error)\n", stderr)
+            exit(1)
+        }
     }
 }
 
